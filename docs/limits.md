@@ -124,6 +124,32 @@ of what was once true stays visible.
   eval set (spec 6.7.3) — they're hand-picked per rule, documented as such
   in code comments, not presented as a measured probability.
 
+## Phase 5 specific limits (hardening, gRPC, Kubernetes)
+
+- **`internal/grpcdiff` only diffs scalar and nested-message fields.**
+  Repeated and map fields are rendered as "`<list len=N>`"/"`<map
+  len=N>`" and compared only by length — a reordered or
+  element-wise-changed list won't get the keyed-array treatment
+  `internal/diff` gives JSON arrays. Follow-up: port that logic.
+- **Proto3 scalar field presence is inherently ambiguous.** A scalar
+  field "cleared to its zero value" and "never set" look identical over
+  the wire in plain proto3 (no `optional` keyword). `grpcdiff` always
+  compares values directly for scalars, which means it reports a
+  VALUE_CHANGED when a field goes from non-zero to zero, but can't
+  distinguish "explicitly set to zero" from "removed" the way JSON's
+  `FIELD_REMOVED` can. This is a protobuf limitation, not a code bug.
+- **`KubernetesEnvironment` has never run against a real cluster.**
+  `kubectl` is installed in this dev environment but there's no cluster
+  (`kubectl cluster-info` fails to connect). Only compile-time interface
+  conformance and a pure pod-name-sanitizer unit test exist. Do not use
+  in production without testing against a real cluster first.
+- **The Helm chart was lint/template-verified, not install-verified.**
+  `helm lint` and `helm template` both pass, but nothing was ever
+  `helm install`ed anywhere.
+- **No cross-run noise model persistence, no scale tests, no load-tested
+  performance budgets.** All three need infrastructure this environment
+  lacks (an artifact store/control plane, a load-testing rig).
+
 ## Resolved
 
 (none yet — Phase 1 is the first phase)

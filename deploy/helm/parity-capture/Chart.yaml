@@ -1,0 +1,12 @@
+apiVersion: v2
+name: parity-capture
+description: >
+  Deploys the Parity capture sidecar/proxy as a standalone Deployment in
+  front of a service. `helm lint` and `helm template` both pass (verified
+  in Phase 5), but there is no Kubernetes cluster in this dev environment
+  to actually `helm install` against — see ../../../docs/plans/phase-5.md
+  and ../../../docs/limits.md. Review and test against a real cluster
+  before relying on it in production.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

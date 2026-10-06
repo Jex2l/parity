@@ -1,0 +1,38 @@
+{{/* UNVERIFIED — see Chart.yaml and docs/plans/phase-5.md. */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-parity-capture
+  labels:
+    app: parity-capture
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: parity-capture
+  template:
+    metadata:
+      labels:
+        app: parity-capture
+    spec:
+      containers:
+        - name: parity-capture
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "-segments={{ .Values.capture.segmentsDir }}"
+          ports:
+            - containerPort: 8080
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: segments
+              mountPath: {{ .Values.capture.segmentsDir }}
+      volumes:
+        - name: segments
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-parity-segments
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

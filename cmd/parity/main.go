@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/jex2l/parity/internal/recording"
 	"github.com/jex2l/parity/internal/replay"
+	"github.com/jex2l/parity/internal/retention"
 	"github.com/jex2l/parity/internal/testgen"
 
 	orchestrate "github.com/jex2l/parity/internal/orchestrate"
@@ -52,6 +54,8 @@ func main() {
 			usage()
 			os.Exit(exitInfraError)
 		}
+	case "purge":
+		os.Exit(runPurge(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(exitInfraError)
@@ -64,7 +68,8 @@ func usage() {
   parity replay --segment <path> --base-cmd <path> --candidate-cmd <path> [--candidate-env K=V] [--sample N] [--out report.json]
   parity report <report.json>
   parity test generate --segment <path> [--sample N] --out <cases.json>
-  parity test run --cases <cases.json> --cmd <path> [--port-env NAME] [--health-path /path]`)
+  parity test run --cases <cases.json> --cmd <path> [--port-env NAME] [--health-path /path]
+  parity purge --dir <segments-dir> --older-than <duration, e.g. 168h>`)
 }
 
 func runInspect(args []string) int {
@@ -370,6 +375,46 @@ func runTestRun(args []string) int {
 	fmt.Printf("%d/%d passed\n", len(results)-failed, len(results))
 	if failed > 0 {
 		return exitUnintended
+	}
+	return exitClean
+}
+
+func runPurge(args []string) int {
+	var dir, olderThanStr string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dir":
+			i++
+			dir = args[i]
+		case "--older-than":
+			i++
+			olderThanStr = args[i]
+		}
+	}
+	if dir == "" || olderThanStr == "" {
+		usage()
+		return exitInfraError
+	}
+	olderThan, err := time.ParseDuration(olderThanStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parity purge: invalid --older-than %q: %v\n", olderThanStr, err)
+		return exitInfraError
+	}
+
+	res, err := retention.Purge(dir, olderThan, time.Now())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parity purge: %v\n", err)
+		return exitInfraError
+	}
+	fmt.Printf("deleted %d segment(s), kept %d\n", len(res.Deleted), len(res.Kept))
+	for _, p := range res.Deleted {
+		fmt.Printf("  deleted %s\n", p)
+	}
+	for _, e := range res.Errors {
+		fmt.Fprintf(os.Stderr, "  error: %s\n", e)
+	}
+	if len(res.Errors) > 0 {
+		return exitInfraError
 	}
 	return exitClean
 }

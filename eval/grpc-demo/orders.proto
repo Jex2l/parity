@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package grpcdemo;
+
+option go_package = "github.com/jex2l/parity/eval/grpc-demo/pb";
+
+// OrdersService is a minimal gRPC service used only to prove Phase 5's
+// protobuf-aware diffing against a real round trip, mirroring the
+// demo-service's REST /orders/{id} endpoint.
+service OrdersService {
+  rpc GetOrder(GetOrderRequest) returns (Order);
+}
+
+message GetOrderRequest {
+  int32 id = 1;
+}
+
+message Order {
+  int32 id = 1;
+  int32 user_id = 2;
+  double total = 3;
+  string status = 4;
+}

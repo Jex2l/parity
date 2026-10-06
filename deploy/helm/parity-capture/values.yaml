@@ -1,0 +1,23 @@
+# UNVERIFIED defaults — see Chart.yaml. Edit before any real deployment.
+image:
+  repository: ghcr.io/example/parity-capture
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+capture:
+  listen: ":8080"
+  upstream: "http://localhost:3000"
+  segmentsDir: "/var/lib/parity/segments"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClassName: ""

@@ -89,6 +89,44 @@ func TestPseudonymize_ReferentiallyConsistent(t *testing.T) {
 	}
 }
 
+// TestPhoneDetector_DoesNotMatchISODates is the regression test for a
+// bug found via manual testing (not a unit test gap caught in advance):
+// the webui rendered a `created_at` timestamp as a fake phone number
+// because the broad phone regex matched the "2024-12-31" date prefix.
+func TestPhoneDetector_DoesNotMatchISODates(t *testing.T) {
+	s := New(Config{})
+	in := `{"created_at":"2024-12-31T22:00:00Z"}`
+	out := string(s.ScrubBody([]byte(in)))
+	if out != in {
+		t.Fatalf("expected an ISO-8601 timestamp to pass through unscrubbed, got %q (was %q)", out, in)
+	}
+}
+
+// TestPhoneDetector_DoesNotMatchBareDigitRuns is the regression test for
+// a second instance of the same underlying bug, found a few minutes
+// after the first fix while still testing the webui: a `total_revenue`
+// float's long decimal tail (no separators at all) was also corrupted
+// by the broad phone pattern.
+func TestPhoneDetector_DoesNotMatchBareDigitRuns(t *testing.T) {
+	s := New(Config{})
+	in := `{"total_revenue":5043.6789012345,"order_count":200}`
+	out := string(s.ScrubBody([]byte(in)))
+	if out != in {
+		t.Fatalf("expected a bare numeric literal to pass through unscrubbed, got %q (was %q)", out, in)
+	}
+}
+
+// TestPhoneDetector_StillCatchesRealPhoneNumbers guards against
+// over-correcting the fix above into a detector that stops working.
+func TestPhoneDetector_StillCatchesRealPhoneNumbers(t *testing.T) {
+	s := New(Config{})
+	in := `{"phone":"415-555-0199"}`
+	out := string(s.ScrubBody([]byte(in)))
+	if out == in {
+		t.Fatalf("expected a real phone number to still be detected and pseudonymized, got it unchanged: %q", out)
+	}
+}
+
 func TestIsLuhnValid(t *testing.T) {
 	cases := map[string]bool{
 		"4111111111111111": true,

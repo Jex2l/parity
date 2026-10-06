@@ -230,6 +230,30 @@ reasoned about:
   packages (`internal/capture`, `internal/replay`, `internal/orchestrate`,
   `eval/harness`) — clean, no new data races introduced.
 
+## Interactive web report viewer (post-Phase-6, not a numbered phase)
+
+Built `cmd/parity-webui` per spec 6.9. See `docs/plans/phase-7-webui.md`
+for the full writeup. Headline items:
+
+- **No automated frontend tests.** `app.js` was verified by actually
+  loading the page in a real browser and interacting with every control
+  (search, filters, sorting, example tabs, run switching, theme toggle)
+  during this session — but `make test` does not exercise it, so a
+  regression there would go uncaught by CI.
+- **No auth.** This is a local/trusted-network tool; spec 6.9's "shareable
+  behind auth" would need a reverse proxy in front of it.
+- **Two real scrub bugs found and fixed while using the UI** (not found
+  by a unit test in advance): the phone-number detector's regex matched
+  ISO-8601 date prefixes (corrupting every timestamp in scrubbed output)
+  and bare long digit runs with no phone-like separator (corrupting a
+  float's decimal digits, e.g. a revenue total). Both fixed by requiring
+  an actual phone-like separator or a leading `+`, with regression tests
+  for the bug and for "a real phone number is still caught." This is
+  exactly the kind of gap that only surfaces when a feature is actually
+  exercised end-to-end rather than only unit-tested in isolation —
+  worth noting as a general argument for building (and using) the UI,
+  beyond its value as a deliverable in its own right.
+
 ## Resolved (phase-numbered items that were fixed later, not in the robustness pass above)
 
 (none yet)

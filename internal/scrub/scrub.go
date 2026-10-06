@@ -67,6 +67,14 @@ var (
 	ibanRe     = regexp.MustCompile(`\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b`)
 	apiKeyRe   = regexp.MustCompile(`\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]{10,}\b`)
 	ccDigitsRe = regexp.MustCompile(`\b(?:\d[ -]?){13,19}\b`)
+	// isoDatePrefixRe catches the false-positive the phone detector was
+	// originally prone to: an ISO-8601 date like "2024-12-31" is 10
+	// characters of digits-and-dashes, which the broad phone pattern
+	// above matches just as happily as a real phone number — corrupting
+	// any timestamp field it touches. Found via manual testing of the
+	// webui (a `created_at` value coming out as a fake phone number),
+	// not from a unit test gap alone; see TestPhoneDetector_DoesNotMatchISODates.
+	isoDatePrefixRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
 )
 
 // Scrubber applies the configured policies to an Exchange.
@@ -220,7 +228,7 @@ func (s *Scrubber) detectors() []detector {
 		{"credit_card", ccDigitsRe, isLuhnValid},
 		{"iban", ibanRe, nil},
 		{"ip_address", ipRe, nil},
-		{"phone", phoneRe, nil},
+		{"phone", phoneRe, isLikelyPhoneNotDate},
 	}
 }
 
@@ -269,6 +277,30 @@ func numericDigest(hexDigest string, n int) string {
 		b.WriteString(strconv.Itoa(int(v) % 10))
 	}
 	return b.String()
+}
+
+// isLikelyPhoneNotDate rejects two shapes phoneRe's broad character
+// class otherwise matches just as happily as a real phone number:
+//  1. An ISO-8601 date prefix (e.g. "2024-12-31") — found via manual
+//     webui testing when a `created_at` field came out as a fake phone
+//     number.
+//  2. A bare run of digits with no phone-like separator at all (no
+//     space, dash, parenthesis, or leading '+') — found the same way, a
+//     few minutes later, when a `total_revenue` float's long decimal
+//     tail (e.g. "5043.6789012345") was corrupted the same way. A real
+//     phone number, written any way a person actually writes one,
+//     always has at least one separator or a country-code '+'; a bare
+//     10+ digit run is just as likely to be an ID, an amount, or a
+//     float's fractional digits, and the cost of silently corrupting
+//     that is worse than the cost of occasionally missing an
+//     unformatted phone number (still caught if it has any punctuation
+//     at all, which most real-world unformatted numbers still do, e.g.
+//     copy-pasted from a contacts app).
+func isLikelyPhoneNotDate(match string) bool {
+	if isoDatePrefixRe.MatchString(match) {
+		return false
+	}
+	return strings.ContainsAny(match, "-() ") || strings.HasPrefix(match, "+")
 }
 
 // isLuhnValid checks the Luhn checksum for a candidate card number string

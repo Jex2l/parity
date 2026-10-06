@@ -11,9 +11,29 @@ import (
 type ExchangeDiff struct {
 	ExchangeID string
 	Endpoint   string
+	Method     string
+	Path       string // concrete request path, e.g. "/orders/42" (PathTemplate is Endpoint)
 	Signal     []Change
 	Absorbed   []Change
 	Weight     float64 // sampling weight, for blast-radius estimates
+	// BeforeBody/AfterBody are the full response bodies this diff's
+	// Changes were computed from — kept so a report/UI can render a
+	// real before/after example, not just the structural diff summary.
+	// Already scrubbed if the caller configured a Scrubber (see
+	// internal/orchestrate.Config.Scrubber).
+	BeforeBody []byte
+	AfterBody  []byte
+}
+
+// Example is one concrete exchange backing a Cluster, carrying enough to
+// render a real before/after comparison (the UI's "example browser").
+type Example struct {
+	ExchangeID string
+	Method     string
+	Path       string
+	Changes    []Change
+	BeforeBody string
+	AfterBody  string
 }
 
 // Cluster groups exchanges whose signal changes share the same endpoint,
@@ -28,6 +48,7 @@ type Cluster struct {
 	Count            int
 	WeightedCount    float64
 	ExampleExchangeIDs []string // a few representative/diverse examples
+	Examples         []Example  // same examples, with full before/after + per-change detail
 }
 
 const maxExamplesPerCluster = 5
@@ -35,17 +56,31 @@ const maxExamplesPerCluster = 5
 // BuildClusters groups a set of per-exchange diffs (already filtered to
 // their Signal changes) into clusters.
 func BuildClusters(diffs []ExchangeDiff) []Cluster {
+	return buildClustersFrom(diffs, func(d ExchangeDiff) []Change { return d.Signal })
+}
+
+// BuildAbsorbedClusters groups the same per-exchange diffs by their
+// Absorbed changes instead of Signal — the "what the noise model
+// filtered out, and why" view a noise-model inspector needs. A change
+// absorbed as noise still gets grouped and shown, just separately from
+// the clusters that represent real signal.
+func BuildAbsorbedClusters(diffs []ExchangeDiff) []Cluster {
+	return buildClustersFrom(diffs, func(d ExchangeDiff) []Change { return d.Absorbed })
+}
+
+func buildClustersFrom(diffs []ExchangeDiff, changesOf func(ExchangeDiff) []Change) []Cluster {
 	byKey := map[string]*Cluster{}
 	order := []string{}
 
 	for _, d := range diffs {
-		if len(d.Signal) == 0 {
+		changes := changesOf(d)
+		if len(changes) == 0 {
 			continue
 		}
-		key := clusterKey(d.Endpoint, d.Signal)
+		key := clusterKey(d.Endpoint, changes)
 		c, ok := byKey[key]
 		if !ok {
-			paths, types := pathsAndTypes(d.Signal)
+			paths, types := pathsAndTypes(changes)
 			c = &Cluster{
 				Key:          key,
 				Endpoint:     d.Endpoint,
@@ -61,11 +96,19 @@ func BuildClusters(diffs []ExchangeDiff) []Cluster {
 		} else {
 			c.WeightedCount++
 		}
-		if sev := MaxSeverity(d.Signal); sev > c.Severity {
+		if sev := MaxSeverity(changes); sev > c.Severity {
 			c.Severity = sev
 		}
 		if len(c.ExampleExchangeIDs) < maxExamplesPerCluster {
 			c.ExampleExchangeIDs = append(c.ExampleExchangeIDs, d.ExchangeID)
+			c.Examples = append(c.Examples, Example{
+				ExchangeID: d.ExchangeID,
+				Method:     d.Method,
+				Path:       d.Path,
+				Changes:    changes,
+				BeforeBody: string(d.BeforeBody),
+				AfterBody:  string(d.AfterBody),
+			})
 		}
 	}
 

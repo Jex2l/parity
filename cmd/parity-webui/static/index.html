@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parity report</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="brand">Parity</span>
+    <select id="run-switcher" title="Switch between report runs"></select>
+    <label class="auto-refresh">
+      <input type="checkbox" id="auto-refresh-toggle">
+      Auto-refresh
+    </label>
+    <button id="refresh-btn" title="Reload the current report from disk">Refresh</button>
+  </div>
+  <div class="topbar-right">
+    <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
+  </div>
+</header>
+
+<section id="summary-bar" class="summary-bar"></section>
+
+<nav class="tabs">
+  <button class="tab-btn" data-tab="clusters">Clusters</button>
+  <button class="tab-btn" data-tab="noise">Noise model</button>
+  <button class="tab-btn" data-tab="perf">Performance</button>
+</nav>
+
+<main id="tab-clusters" class="tab-panel">
+  <div class="cluster-layout">
+    <aside class="cluster-sidebar">
+      <div class="sidebar-controls">
+        <input id="cluster-search" type="search" placeholder="Search endpoint or path…">
+        <div class="severity-filters" id="severity-filters"></div>
+        <div class="view-toggle">
+          <button class="toggle-btn active" data-view="signal">Signal</button>
+          <button class="toggle-btn" data-view="absorbed">Absorbed (noise)</button>
+        </div>
+        <select id="sort-select">
+          <option value="severity">Sort: severity</option>
+          <option value="blast">Sort: blast radius</option>
+          <option value="endpoint">Sort: endpoint</option>
+        </select>
+      </div>
+      <ol id="cluster-list" class="cluster-list" tabindex="0"></ol>
+    </aside>
+    <section id="cluster-detail" class="cluster-detail">
+      <p class="empty-state">Select a cluster to inspect it.</p>
+    </section>
+  </div>
+</main>
+
+<main id="tab-noise" class="tab-panel hidden">
+  <div class="noise-controls">
+    <input id="noise-search" type="search" placeholder="Filter by endpoint or path…">
+    <div class="noise-class-filters" id="noise-class-filters"></div>
+  </div>
+  <table id="noise-table" class="data-table">
+    <thead><tr><th data-sort="endpoint">Endpoint</th><th data-sort="path">JSON path</th><th data-sort="class">Learned class</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p id="noise-empty" class="empty-state hidden">No noise model entries in this report (not enough base-A/base-B samples, or every path was perfectly stable).</p>
+</main>
+
+<main id="tab-perf" class="tab-panel hidden">
+  <table id="perf-table" class="data-table">
+    <thead><tr><th>Endpoint</th><th>Base p95</th><th>Candidate p95</th><th>Effect</th><th>p-value</th><th>Chart</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p id="perf-empty" class="empty-state hidden">No performance regressions detected (or no replay durations recorded for this report).</p>
+</main>
+
+<template id="change-row-template">
+  <tr>
+    <td class="change-path"></td>
+    <td class="change-type"></td>
+    <td class="change-before"></td>
+    <td class="change-after"></td>
+  </tr>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>

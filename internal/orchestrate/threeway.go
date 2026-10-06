@@ -116,28 +116,47 @@ func Run(ctx context.Context, cfg Config, exchanges []*pb.Exchange) (report.Repo
 		exchangeDiffs = append(exchangeDiffs, diff.ExchangeDiff{
 			ExchangeID: ex.GetExchangeId(),
 			Endpoint:   ep,
+			Method:     ex.GetInbound().GetMethod(),
+			Path:       ex.GetInbound().GetPath(),
 			Signal:     signal,
 			Absorbed:   absorbed,
 			Weight:     ex.GetSampling().GetWeight(),
+			BeforeBody: resultsA[i].Body,
+			AfterBody:  resultsC[i].Body,
 		})
 	}
 
 	fidelity := diff.Compute(fidelityInputs)
 	clusters := diff.BuildClusters(exchangeDiffs)
+	absorbedClusters := diff.BuildAbsorbedClusters(exchangeDiffs)
 	perfRegressions := detectPerfRegressions(exchanges, resultsA, resultsB, resultsC)
 
 	return report.Report{
-		TotalReplayed:   len(exchanges),
+		TotalReplayed:    len(exchanges),
 		Fidelity: report.FidelitySummary{
 			Score:         fidelity.Score,
 			LowConfidence: fidelity.IsLowConfidence(),
 			Reason:        fidelity.Reason(),
 		},
-		Clusters:        report.FromClusters(clusters),
-		AbsorbedCount:   absorbedTotal,
-		SignalCount:     signalTotal,
-		PerfRegressions: perfRegressions,
+		Clusters:         report.FromClusters(clusters),
+		AbsorbedClusters: report.FromClusters(absorbedClusters),
+		AbsorbedCount:    absorbedTotal,
+		SignalCount:      signalTotal,
+		PerfRegressions:  perfRegressions,
+		NoiseModel:       flattenNoiseModels(models),
 	}, nil
+}
+
+// flattenNoiseModels converts the internal per-endpoint noise models into
+// a flat, report-friendly list for the noise-model inspector UI.
+func flattenNoiseModels(models map[string]diff.NoiseModel) []report.NoiseModelEntry {
+	var out []report.NoiseModelEntry
+	for endpoint, model := range models {
+		for path, class := range model {
+			out = append(out, report.NoiseModelEntry{Endpoint: endpoint, Path: path, Class: string(class)})
+		}
+	}
+	return out
 }
 
 // detectPerfRegressions groups per-exchange replay durations by endpoint

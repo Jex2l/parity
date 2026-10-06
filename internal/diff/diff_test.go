@@ -122,6 +122,54 @@ func TestClusters_GroupByEndpointAndPaths(t *testing.T) {
 	}
 }
 
+func TestClusters_ExamplesCarryBeforeAfterBodies(t *testing.T) {
+	diffs := []ExchangeDiff{
+		{
+			ExchangeID: "e1", Endpoint: "/orders/{id}", Method: "GET", Path: "/orders/1",
+			Signal:     []Change{{Path: "$.status", Type: FieldRemoved}},
+			BeforeBody: []byte(`{"status":"paid"}`), AfterBody: []byte(`{"state":"paid"}`),
+		},
+	}
+	clusters := BuildClusters(diffs)
+	if len(clusters) != 1 {
+		t.Fatalf("expected 1 cluster, got %d", len(clusters))
+	}
+	if len(clusters[0].Examples) != 1 {
+		t.Fatalf("expected 1 example, got %d", len(clusters[0].Examples))
+	}
+	ex := clusters[0].Examples[0]
+	if ex.ExchangeID != "e1" || ex.Method != "GET" || ex.Path != "/orders/1" {
+		t.Fatalf("example identity wrong: %+v", ex)
+	}
+	if ex.BeforeBody != `{"status":"paid"}` || ex.AfterBody != `{"state":"paid"}` {
+		t.Fatalf("example bodies wrong: %+v", ex)
+	}
+	if len(ex.Changes) != 1 || ex.Changes[0].Path != "$.status" {
+		t.Fatalf("example changes wrong: %+v", ex.Changes)
+	}
+}
+
+func TestBuildAbsorbedClusters_GroupsNoiseSeparatelyFromSignal(t *testing.T) {
+	diffs := []ExchangeDiff{
+		{ExchangeID: "e1", Endpoint: "/orders/{id}", Signal: []Change{{Path: "$.total", Type: ValueChanged}}, Absorbed: []Change{{Path: "$.generated_at", Type: ValueChanged}}},
+		{ExchangeID: "e2", Endpoint: "/orders/{id}", Signal: nil, Absorbed: []Change{{Path: "$.generated_at", Type: ValueChanged}}},
+	}
+	signalClusters := BuildClusters(diffs)
+	if len(signalClusters) != 1 {
+		t.Fatalf("expected 1 signal cluster, got %d", len(signalClusters))
+	}
+	absorbedClusters := BuildAbsorbedClusters(diffs)
+	if len(absorbedClusters) != 1 {
+		t.Fatalf("expected 1 absorbed cluster, got %d", len(absorbedClusters))
+	}
+	if absorbedClusters[0].Count != 2 {
+		t.Fatalf("expected both exchanges' absorbed generated_at changes grouped together, got count=%d", absorbedClusters[0].Count)
+	}
+	if absorbedClusters[0].ChangedPaths[0] != "$.generated_at" {
+		t.Fatalf("expected absorbed cluster to be keyed on $.generated_at, got %+v", absorbedClusters[0])
+	}
+}
+
 func TestFidelity_LowConfidenceReasoning(t *testing.T) {
 	results := make([]ExchangeFidelity, 100)
 	for i := range results {

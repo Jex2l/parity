@@ -39,5 +39,12 @@ demo: build
 	@echo "--- segment summary ---"
 	./bin/parity inspect $(SEGMENTS_DIR)/seg-000001.zst
 
+# make webui REPORT=report.json: builds and runs the interactive HTML
+# report viewer against an already-written report.json (see `parity
+# replay --out`). Open http://localhost:4400 once it's running.
+webui: build
+	$(GO) build -o bin/parity-webui ./cmd/parity-webui
+	./bin/parity-webui -report $(or $(REPORT),report.json) -addr :4400
+
 clean:
 	rm -rf bin $(SEGMENTS_DIR) demo.pid capture.pid

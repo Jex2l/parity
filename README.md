@@ -56,6 +56,22 @@ To look at individual captured exchanges (already scrubbed of PII/secrets):
 cat ./segments/seg-000001.zst.jsonl | head -1 | python3 -m json.tool
 ```
 
+## Interactive web report viewer
+
+After a `parity replay` run writes a `report.json`, explore it in a
+browser instead of reading raw JSON:
+
+```bash
+make webui REPORT=report.json
+# open http://localhost:4400
+```
+
+Full cluster explorer (search/filter/sort), a before/after JSON example
+browser with inline diff highlighting, a performance regression chart,
+and a noise-model inspector. No build step, no external dependency —
+a single Go binary with the frontend embedded. See
+`docs/plans/phase-7-webui.md`.
+
 ## Architecture (Phase 1 slice)
 
 ```

@@ -1,0 +1,11 @@
+service: demo-service
+capture:
+  listen: ":8080"
+  upstream: "http://localhost:3000"
+  sampling:
+    default_rate: 1.0
+    interesting: true
+  deny_paths: ["/health"]
+scrub:
+  default_policy: pseudonymize
+  headers_allow: [content-type, accept]

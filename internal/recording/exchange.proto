@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package recording;
+
+option go_package = "github.com/jex2l/parity/internal/recording/pb";
+
+// FidelityFlag marks known reasons a captured exchange may not replay
+// faithfully (see docs/limits.md).
+enum FidelityFlag {
+  FIDELITY_FLAG_UNSPECIFIED = 0;
+  HAS_WRITE_SIDE_EFFECTS = 1;
+  DEPENDS_ON_TIME = 2;
+  DEPENDS_ON_RANDOMNESS = 3;
+  STREAMING = 4;
+  LARGE_BODY_TRUNCATED = 5;
+}
+
+message Header {
+  string name = 1;
+  repeated string values = 2;
+}
+
+message Inbound {
+  string method = 1;
+  string scheme = 2;
+  string host = 3; // may be hashed/redacted per config
+  string path = 4;
+  string path_template = 5; // e.g. /users/{id}/orders/{id}
+  string query = 6;
+  repeated Header headers = 7; // allowlisted only
+  bytes body = 8;
+  string body_content_type = 9;
+  string protocol_version = 10;
+}
+
+message Outbound {
+  string method = 1;
+  string url = 2;
+  string url_template = 3;
+  repeated Header request_headers = 4;
+  bytes request_body = 5;
+  int32 response_status = 6;
+  repeated Header response_headers = 7;
+  bytes response_body = 8;
+  int64 duration_micros = 9;
+  string correlation_id = 10;
+  int32 sequence = 11; // order within the inbound exchange
+}
+
+message Response {
+  int32 status = 1;
+  repeated Header headers = 2;
+  bytes body = 3;
+  int64 time_to_first_byte_micros = 4;
+  int64 total_duration_micros = 5;
+}
+
+message ScrubReport {
+  string scrub_version = 1;
+  repeated string redactions = 2; // "<path>:<rule>" entries
+}
+
+message Sampling {
+  string strategy = 1;
+  double rate = 2;
+  double weight = 3; // 1/rate, used to weight aggregate stats
+}
+
+message Exchange {
+  string exchange_id = 1; // UUIDv7
+  string trace_id = 2;
+  int64 captured_at_unix_micros = 3;
+  string service = 4;
+  string environment = 5;
+  string build_sha = 6;
+
+  Inbound inbound = 7;
+  repeated Outbound outbound = 8;
+  Response response = 9;
+
+  ScrubReport scrub_report = 10;
+  Sampling sampling = 11;
+  repeated FidelityFlag fidelity_flags = 12;
+}

@@ -1,0 +1,7 @@
+bin/
+segments/
+*.pid
+*.zst
+*.zst.idx
+*.zst.jsonl
+.DS_Store

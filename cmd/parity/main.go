@@ -12,6 +12,7 @@ import (
 
 	"github.com/jex2l/parity/internal/recording"
 	"github.com/jex2l/parity/internal/replay"
+	"github.com/jex2l/parity/internal/testgen"
 
 	orchestrate "github.com/jex2l/parity/internal/orchestrate"
 	"github.com/jex2l/parity/internal/report"
@@ -37,6 +38,20 @@ func main() {
 		os.Exit(runReplay(os.Args[2:]))
 	case "report":
 		os.Exit(runReport(os.Args[2:]))
+	case "test":
+		if len(os.Args) < 3 {
+			usage()
+			os.Exit(exitInfraError)
+		}
+		switch os.Args[2] {
+		case "generate":
+			os.Exit(runTestGenerate(os.Args[3:]))
+		case "run":
+			os.Exit(runTestRun(os.Args[3:]))
+		default:
+			usage()
+			os.Exit(exitInfraError)
+		}
 	default:
 		usage()
 		os.Exit(exitInfraError)
@@ -47,7 +62,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   parity inspect <segment-path> [--jsonl]
   parity replay --segment <path> --base-cmd <path> --candidate-cmd <path> [--candidate-env K=V] [--sample N] [--out report.json]
-  parity report <report.json>`)
+  parity report <report.json>
+  parity test generate --segment <path> [--sample N] --out <cases.json>
+  parity test run --cases <cases.json> --cmd <path> [--port-env NAME] [--health-path /path]`)
 }
 
 func runInspect(args []string) int {
@@ -244,4 +261,115 @@ func splitKV(s string) [2]string {
 		}
 	}
 	return [2]string{"", ""}
+}
+
+func runTestGenerate(args []string) int {
+	var segment, out string
+	sample := 0
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--segment":
+			i++
+			segment = args[i]
+		case "--sample":
+			i++
+			fmt.Sscanf(args[i], "%d", &sample)
+		case "--out":
+			i++
+			out = args[i]
+		}
+	}
+	if segment == "" || out == "" {
+		usage()
+		return exitInfraError
+	}
+
+	r, err := recording.NewReader(segment)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parity test generate: %v\n", err)
+		return exitInfraError
+	}
+	defer r.Close()
+	exchanges, err := orchestrate.LoadExchanges(r.Next, sample)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parity test generate: %v\n", err)
+		return exitInfraError
+	}
+
+	cases := testgen.Generate(exchanges, nil)
+	f, err := os.Create(out)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parity test generate: %v\n", err)
+		return exitInfraError
+	}
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	encErr := enc.Encode(cases)
+	f.Close()
+	if encErr != nil {
+		fmt.Fprintf(os.Stderr, "parity test generate: %v\n", encErr)
+		return exitInfraError
+	}
+	fmt.Printf("wrote %d test cases to %s\n", len(cases), out)
+	return exitClean
+}
+
+func runTestRun(args []string) int {
+	var casesPath, cmdPath, portEnv, healthPath string
+	portEnv, healthPath = "DEMO_ADDR", "/health"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--cases":
+			i++
+			casesPath = args[i]
+		case "--cmd":
+			i++
+			cmdPath = args[i]
+		case "--port-env":
+			i++
+			portEnv = args[i]
+		case "--health-path":
+			i++
+			healthPath = args[i]
+		}
+	}
+	if casesPath == "" || cmdPath == "" {
+		usage()
+		return exitInfraError
+	}
+
+	b, err := os.ReadFile(casesPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parity test run: %v\n", err)
+		return exitInfraError
+	}
+	var cases []testgen.Case
+	if err := json.Unmarshal(b, &cases); err != nil {
+		fmt.Fprintf(os.Stderr, "parity test run: %v\n", err)
+		return exitInfraError
+	}
+
+	env := replay.NewProcessEnvironment(portEnv, healthPath)
+	ep, err := env.Provision(context.Background(), replay.BuildRef{Name: "test-run", Cmd: cmdPath})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parity test run: %v\n", err)
+		return exitInfraError
+	}
+	defer env.Teardown(context.Background())
+
+	results := testgen.Run(ep.BaseURL, cases)
+	failed := 0
+	for _, r := range results {
+		if r.Passed {
+			fmt.Printf("PASS %s\n", r.Case.Name)
+		} else {
+			failed++
+			fmt.Printf("FAIL %s: %s\n", r.Case.Name, r.Reason)
+		}
+	}
+	fmt.Printf("%d/%d passed\n", len(results)-failed, len(results))
+	if failed > 0 {
+		return exitUnintended
+	}
+	return exitClean
 }

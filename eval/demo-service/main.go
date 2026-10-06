@@ -203,7 +203,11 @@ func main() {
 
 	// GET /slow — deliberately slow endpoint for perf-regression testing (Phase 3)
 	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond)
+		delay := 50 * time.Millisecond
+		if mutation == "slow_5x" {
+			delay *= 5 // unintended: a 5x latency regression on this endpoint only
+		}
+		time.Sleep(delay)
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
 

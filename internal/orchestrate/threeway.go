@@ -9,8 +9,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/jex2l/parity/internal/diff"
+	"github.com/jex2l/parity/internal/perf"
 	pb "github.com/jex2l/parity/internal/recording/pb"
 	"github.com/jex2l/parity/internal/replay"
 	"github.com/jex2l/parity/internal/report"
@@ -104,18 +106,55 @@ func Run(ctx context.Context, cfg Config, exchanges []*pb.Exchange) (report.Repo
 
 	fidelity := diff.Compute(fidelityInputs)
 	clusters := diff.BuildClusters(exchangeDiffs)
+	perfRegressions := detectPerfRegressions(exchanges, resultsA, resultsB, resultsC)
 
 	return report.Report{
-		TotalReplayed: len(exchanges),
+		TotalReplayed:   len(exchanges),
 		Fidelity: report.FidelitySummary{
 			Score:         fidelity.Score,
 			LowConfidence: fidelity.IsLowConfidence(),
 			Reason:        fidelity.Reason(),
 		},
-		Clusters:      report.FromClusters(clusters),
-		AbsorbedCount: absorbedTotal,
-		SignalCount:   signalTotal,
+		Clusters:        report.FromClusters(clusters),
+		AbsorbedCount:   absorbedTotal,
+		SignalCount:     signalTotal,
+		PerfRegressions: perfRegressions,
 	}, nil
+}
+
+// detectPerfRegressions groups per-exchange replay durations by endpoint
+// template and runs perf.Detect on each group, per spec 6.6: only the
+// A-vs-B noise floor, not raw variance, gates what counts as a regression.
+func detectPerfRegressions(exchanges []*pb.Exchange, resultsA, resultsB, resultsC []replay.ExchangeResult) []report.PerfRegressionView {
+	type durs struct{ a, b, c []time.Duration }
+	byEndpoint := map[string]*durs{}
+	for i := range exchanges {
+		ep := resultsA[i].Endpoint
+		d, ok := byEndpoint[ep]
+		if !ok {
+			d = &durs{}
+			byEndpoint[ep] = d
+		}
+		d.a = append(d.a, resultsA[i].Duration)
+		d.b = append(d.b, resultsB[i].Duration)
+		d.c = append(d.c, resultsC[i].Duration)
+	}
+	cfg := perf.DefaultRegressionConfig()
+	var out []report.PerfRegressionView
+	for ep, d := range byEndpoint {
+		reg, found := perf.Detect(ep, d.a, d.b, d.c, cfg)
+		if !found {
+			continue
+		}
+		out = append(out, report.PerfRegressionView{
+			Endpoint:       reg.Endpoint,
+			BaseP95Ms:      float64(reg.BaseP95.Microseconds()) / 1000,
+			CandidateP95Ms: float64(reg.CandidateP95.Microseconds()) / 1000,
+			EffectPct:      reg.EffectPct,
+			PValue:         reg.PValue,
+		})
+	}
+	return out
 }
 
 // LoadExchanges reads up to limit exchanges from a recording reader

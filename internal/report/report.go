@@ -15,6 +15,16 @@ type Report struct {
 	Clusters       []ClusterView  `json:"clusters"`
 	AbsorbedCount  int            `json:"absorbed_count"`
 	SignalCount    int            `json:"signal_count"`
+	PerfRegressions []PerfRegressionView `json:"perf_regressions,omitempty"`
+}
+
+// PerfRegressionView is the report-facing shape of a perf.Regression.
+type PerfRegressionView struct {
+	Endpoint      string  `json:"endpoint"`
+	BaseP95Ms     float64 `json:"base_p95_ms"`
+	CandidateP95Ms float64 `json:"candidate_p95_ms"`
+	EffectPct     float64 `json:"effect_pct"`
+	PValue        float64 `json:"p_value"`
 }
 
 type FidelitySummary struct {

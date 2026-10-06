@@ -83,6 +83,27 @@ of what was once true stays visible.
 - **Mutation catalog has 6 entries**, not the ~15+ in the full spec. See
   docs/plans/phase-2.md for the honest reasoning.
 
+## Phase 3 specific limits (performance analysis + test generation)
+
+- **No resource metrics (CPU/memory/DB-query counts).** The demo service
+  has no outbound dependencies or cgroup instrumentation wired up, so
+  there is nothing real to measure yet; building this without something
+  to verify against would be unverifiable. N+1 detection depends on this
+  and is deferred with it.
+- **Mann-Whitney U uses a normal approximation**, not an exact permutation
+  test. Fine at the sample sizes this product targets (always well above
+  the ~20-sample threshold where the approximation is reliable), but
+  worth knowing if someone reduces `--sample` to something tiny.
+- **Test generation emits only the portable YAML/JSON format**; the
+  spec's optional language-native generators (Go httptest, pytest,
+  vitest) don't exist yet.
+- **Masking only handles UUID- and timestamp-shaped strings**, not the
+  full noise-class taxonomy from `internal/diff` (no `<ANY_FLOAT_WITHIN>`
+  matcher yet, for example) — a generated test could still flake on a
+  field the diff engine's noise model would correctly absorb but testgen
+  doesn't know to mask the same way. Tracked as a follow-up to unify the
+  two.
+
 ## Resolved
 
 (none yet — Phase 1 is the first phase)

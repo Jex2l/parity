@@ -32,6 +32,15 @@ type order struct {
 var users = seedUsers(50)
 var orders = seedOrders(200)
 
+// mutation is read from PARITY_MUTATION at startup. It toggles exactly one
+// injected behavior change at a time so the eval harness can replay the
+// same binary as "base" (mutation="") and "candidate" (mutation=X) without
+// a real second build — see docs/plans/phase-2.md for why this is a
+// harness-only convenience, not how `parity replay` works for real users.
+// Each case is labeled with the ground truth the eval harness scores
+// against: see eval/mutations/catalog.go.
+var mutation = os.Getenv("PARITY_MUTATION")
+
 func seedUsers(n int) []user {
 	out := make([]user, n)
 	for i := range out {
@@ -41,15 +50,27 @@ func seedUsers(n int) []user {
 }
 
 func seedOrders(n int) []order {
+	// Deterministic seed: every process instance (base-A, base-B,
+	// candidate) must generate identical order data, or the three-way
+	// comparison would see spurious diffs that are just restart noise,
+	// not real nondeterminism to learn from.
+	rng := rand.New(rand.NewSource(42))
+	// Fixed epoch rather than time.Now(): CreatedAt must be identical
+	// across base-A/base-B/candidate process restarts for the eval
+	// harness to be deterministic. A real production capture would see
+	// genuinely time-varying timestamps, which is exactly what the
+	// TIMESTAMP_LIKE noise classifier (internal/diff) is unit-tested
+	// against separately.
+	epoch := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	statuses := []string{"pending", "paid", "shipped", "cancelled"}
 	out := make([]order, n)
 	for i := range out {
 		out[i] = order{
 			ID:        i + 1,
 			UserID:    (i % 50) + 1,
-			Total:     float64(rand.Intn(10000)) / 100,
+			Total:     float64(rng.Intn(10000)) / 100,
 			Status:    statuses[i%len(statuses)],
-			CreatedAt: time.Now().Add(-time.Duration(i) * time.Hour).UTC().Format(time.RFC3339),
+			CreatedAt: epoch.Add(-time.Duration(i) * time.Hour).Format(time.RFC3339),
 		}
 	}
 	return out
@@ -83,6 +104,12 @@ func main() {
 			size = 10
 		}
 		start := (page - 1) * size
+		if mutation == "pagination_off_by_one" {
+			// Unintended: off-by-one causes the first item of each page to
+			// be skipped (and the last page to include one extra from
+			// beyond the dataset boundary handling below).
+			start++
+		}
 		if start > len(users) {
 			start = len(users)
 		}
@@ -133,7 +160,34 @@ func main() {
 			writeJSON(w, 404, map[string]string{"error": "order not found"})
 			return
 		}
-		writeJSON(w, 200, orders[id-1])
+		o := orders[id-1]
+
+		switch mutation {
+		case "status_5xx":
+			// Unintended: this endpoint now always errors.
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+			return
+		case "field_rename":
+			// Unintended: "status" renamed to "state" with no deprecation.
+			writeJSON(w, 200, map[string]any{
+				"id": o.ID, "user_id": o.UserID, "total": o.Total, "state": o.Status, "created_at": o.CreatedAt,
+			})
+			return
+		case "rounding_bug":
+			// Unintended: total truncated to whole dollars, well beyond the
+			// float-jitter tolerance the noise model would absorb.
+			writeJSON(w, 200, map[string]any{
+				"id": o.ID, "user_id": o.UserID, "total": float64(int(o.Total)), "status": o.Status, "created_at": o.CreatedAt,
+			})
+			return
+		case "added_field_intended":
+			// Intended-shaped change: a new field, nothing removed/changed.
+			writeJSON(w, 200, map[string]any{
+				"id": o.ID, "user_id": o.UserID, "total": o.Total, "status": o.Status, "created_at": o.CreatedAt, "currency": "USD",
+			})
+			return
+		}
+		writeJSON(w, 200, o)
 	})
 
 	// GET /stats/revenue — aggregation endpoint

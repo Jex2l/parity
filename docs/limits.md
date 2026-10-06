@@ -50,6 +50,39 @@ of what was once true stays visible.
 - **No Kubernetes/Docker Compose replay** — Phase 1 is capture-only, so
   nothing about replay fidelity can be claimed yet.
 
+## Phase 2 specific limits (replay + three-way comparison)
+
+- **Scrubbed recorded data vs. raw replay data mismatch.** Discovered via
+  manual CLI testing (not hidden): a segment captured through
+  `cmd/parity-capture` has PII (e.g. emails) pseudonymized by
+  `internal/scrub` before it's written. When `parity replay` replays those
+  requests against a live base build, the base build returns its *real*
+  (unscrubbed) data. Comparing the scrubbed recorded response against the
+  raw replay response then shows a spurious diff on every PII-bearing
+  field, tanking the fidelity score for reasons that have nothing to do
+  with the candidate build. `eval/harness/mutation_test.go` sidesteps this
+  by recording its baseline directly (unscrubbed) rather than through the
+  capture pipeline, which is why it reports fidelity=1.00 while a real
+  `parity replay` run against a capture-produced segment would not. The
+  real fix (not done this phase): either scrub the live replay response
+  with the same deterministic pseudonymization before diffing, or restore
+  the base/candidate database from an already-pseudonymized snapshot so
+  both sides are consistently pseudonymized. Tracked as Phase 2.5 follow-up.
+- **No Docker/Kubernetes `Environment`.** Only `ProcessEnvironment`
+  (local subprocess) exists; see docs/plans/phase-2.md and ADR 0002.
+- **No outbound dependency stubbing wired in.** `internal/stub` does not
+  exist yet this phase (the demo service has no downstream calls); it's
+  needed before Phase 3's N+1 detection, which does need a downstream call.
+- **No database snapshot restore / auth credential injection.** The demo
+  service is stateless and unauthenticated, so three-way comparison never
+  needed these; a real customer service almost always will.
+- **Noise model is per-run, not persisted across runs.** `internal/diff.Learn`
+  builds a fresh model from each run's own A/B pairs; the spec's "noise
+  model improves across PRs" (stored as a versioned artifact per endpoint)
+  is not implemented.
+- **Mutation catalog has 6 entries**, not the ~15+ in the full spec. See
+  docs/plans/phase-2.md for the honest reasoning.
+
 ## Resolved
 
 (none yet — Phase 1 is the first phase)

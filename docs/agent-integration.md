@@ -92,7 +92,9 @@ This repo uses Parity for behavioral verification. After making a change:
   against a fake API only.
 - The classifier is the heuristic baseline only; no LLM classifier is
   wired up (no model endpoint configured here).
-- `parity_run_replay`'s fidelity score will look artificially low against
-  a real capture-produced (PII-scrubbed) segment — see the Phase 2
-  limitation in docs/limits.md. It is accurate for segments recorded
-  without the scrub step (e.g. the eval harness's own fixtures).
+- `parity_run_replay`/`parity replay` previously showed artificially low
+  fidelity against a real capture-produced (PII-scrubbed) segment. Fixed
+  in the post-Phase-6 robustness pass: pass `--hmac-secret-env` (CLI) or
+  `hmac_secret_env` (MCP tool), set to the same env var `parity-capture`
+  used, and live replay responses are scrubbed the same way before
+  comparison. See docs/limits.md's "Robustness hardening pass" section.

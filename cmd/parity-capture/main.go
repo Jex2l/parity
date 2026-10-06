@@ -47,7 +47,18 @@ func main() {
 		Service:   cfg.Service,
 	})
 
-	scrubber := scrub.New(scrub.Config{HeadersAllow: cfg.Scrub.HeadersAllow})
+	var hmacSecret []byte
+	if cfg.Scrub.HMACSecretEnv != "" {
+		if v := os.Getenv(cfg.Scrub.HMACSecretEnv); v != "" {
+			hmacSecret = []byte(v)
+		} else {
+			slog.Warn("scrub.hmac_secret_env is set but the named environment variable is empty or unset; falling back to the insecure default pseudonymization secret", "env_var", cfg.Scrub.HMACSecretEnv)
+		}
+	}
+	if len(hmacSecret) == 0 {
+		slog.Warn("no scrub.hmac_secret_env configured (or it resolved empty): using scrub's insecure, well-known default pseudonymization secret. Pseudonymized values in captured segments are NOT safe from an attacker who knows this default. Set scrub.hmac_secret_env in parity.yaml and export that variable with a real per-tenant secret before using this in anything but local development.")
+	}
+	scrubber := scrub.New(scrub.Config{HeadersAllow: cfg.Scrub.HeadersAllow, HMACSecret: hmacSecret})
 	sink, err := capture.NewScrubbingSink(*segDir, scrubber, 0)
 	if err != nil {
 		log.Fatalf("parity-capture: %v", err)

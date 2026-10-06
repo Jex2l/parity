@@ -5,7 +5,6 @@
 package capture
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -85,10 +84,17 @@ func NewProxy(opts Options) *Proxy {
 }
 
 // Run starts the background goroutine that drains the queue into sink.
-// Call it once; it returns a stop function.
+// Call it once; it returns a stop function. Unlike an abrupt cancel, stop
+// first drains whatever is still buffered in the queue into sink before
+// returning (bounded by drainTimeout), so a clean shutdown doesn't throw
+// away exchanges that were already successfully captured — fail-open is
+// for the hot path staying fast under backpressure, not an excuse to
+// drop data on an orderly stop.
 func (p *Proxy) Run(sink Sink) (stop func()) {
 	done := make(chan struct{})
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		for {
 			select {
 			case ex, ok := <-p.queue:
@@ -97,11 +103,28 @@ func (p *Proxy) Run(sink Sink) (stop func()) {
 				}
 				sink.Accept(ex)
 			case <-done:
+				p.drainRemaining(sink)
 				return
 			}
 		}
 	}()
-	return func() { close(done) }
+	return func() {
+		close(done)
+		<-stopped
+	}
+}
+
+// drainRemaining flushes whatever is currently buffered in the queue,
+// without blocking on new arrivals — called only during shutdown.
+func (p *Proxy) drainRemaining(sink Sink) {
+	for {
+		select {
+		case ex := <-p.queue:
+			sink.Accept(ex)
+		default:
+			return
+		}
+	}
 }
 
 // ServeHTTP forwards the request to upstream immediately and, off the hot
@@ -115,13 +138,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var reqBody []byte
+	// Tee the request body into a capped capture buffer while streaming
+	// the full, untouched body to upstream. This matters: an earlier
+	// version of this proxy pre-read the body through a LimitReader and
+	// replaced r.Body with only what it read, which would silently
+	// truncate any upload over the capture cap before it ever reached
+	// the real service — a correctness bug, not just a capture-fidelity
+	// one. A capped buffer never errors on Write (it just stops storing
+	// past the cap), so io.TeeReader never short-circuits the read
+	// upstream is doing.
+	var reqCapture *cappedBuffer
 	if r.Body != nil {
-		reqBody, _ = io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB cap for v1
-		r.Body = io.NopCloser(bytes.NewReader(reqBody))
+		reqCapture = newCappedBuffer(maxCapturedBodyBytes)
+		r.Body = io.NopCloser(io.TeeReader(r.Body, reqCapture))
 	}
 
-	rec := &responseRecorder{ResponseWriter: w, buf: &bytes.Buffer{}, status: 200}
+	rec := &responseRecorder{ResponseWriter: w, buf: newCappedBuffer(maxCapturedBodyBytes), status: 200}
 	start := time.Now()
 	p.upstream.ServeHTTP(rec, r)
 	duration := time.Since(start)
@@ -148,6 +180,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	flags := []pb.FidelityFlag{}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 		flags = append(flags, pb.FidelityFlag_HAS_WRITE_SIDE_EFFECTS)
+	}
+	var reqBody []byte
+	if reqCapture != nil {
+		reqBody = reqCapture.Bytes()
+		if reqCapture.Truncated() {
+			flags = append(flags, pb.FidelityFlag_LARGE_BODY_TRUNCATED)
+		}
+	}
+	if rec.buf.Truncated() {
+		flags = append(flags, pb.FidelityFlag_LARGE_BODY_TRUNCATED)
 	}
 
 	ex := &pb.Exchange{
@@ -210,11 +252,13 @@ func headersToPB(h http.Header) []*pb.Header {
 }
 
 // responseRecorder captures the status and body written by the upstream
-// handler while still writing through to the real client.
+// handler while still writing the full, untouched response through to
+// the real client — capping only matters for what gets captured, never
+// for what the client receives.
 type responseRecorder struct {
 	http.ResponseWriter
-	buf    *bytes.Buffer
-	status int
+	buf         *cappedBuffer
+	status      int
 	wroteHeader bool
 }
 
@@ -228,8 +272,48 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 	if !r.wroteHeader {
 		r.wroteHeader = true
 	}
-	if r.buf.Len() < 1<<20 { // cap captured body at 1MB for v1
-		r.buf.Write(b)
-	}
+	r.buf.Write(b) // cappedBuffer.Write never errors and never blocks capture on size
 	return r.ResponseWriter.Write(b)
 }
+
+// maxCapturedBodyBytes bounds how much of a request/response body is
+// captured for recording. It never bounds what's actually forwarded
+// between client and upstream — see ServeHTTP's use of io.TeeReader and
+// cappedBuffer for why that distinction matters.
+const maxCapturedBodyBytes = 1 << 20 // 1MB
+
+// cappedBuffer accumulates up to a fixed number of bytes and silently
+// (but trackably, via Truncated) drops anything past that — Write never
+// returns an error, so wrapping it in io.TeeReader or calling it from a
+// hot-path handler can never break the real data flow it's observing.
+type cappedBuffer struct {
+	cap       int
+	buf       []byte
+	truncated bool
+}
+
+func newCappedBuffer(capBytes int) *cappedBuffer {
+	return &cappedBuffer{cap: capBytes}
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	room := c.cap - len(c.buf)
+	if room <= 0 {
+		if len(p) > 0 {
+			c.truncated = true
+		}
+		return len(p), nil
+	}
+	if room >= len(p) {
+		c.buf = append(c.buf, p...)
+		return len(p), nil
+	}
+	c.buf = append(c.buf, p[:room]...)
+	c.truncated = true
+	return len(p), nil
+}
+
+func (c *cappedBuffer) Bytes() []byte { return c.buf }
+
+// Truncated reports whether more was written than the cap could hold.
+func (c *cappedBuffer) Truncated() bool { return c.truncated }

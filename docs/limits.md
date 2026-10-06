@@ -35,9 +35,6 @@ of what was once true stays visible.
   preserve `$.order.id` even if it's also a long digit string"). The
   `parity.yaml` `scrub.json_paths` config is parsed by `internal/config` but
   not yet wired into `internal/scrub` — that's the Phase 2 follow-up.
-- **1MB body cap.** Request and response bodies are truncated at 1MB during
-  capture (flagged `LARGE_BODY_TRUNCATED` in the schema, but the capture
-  proxy does not yet set that flag — follow-up).
 - **Endpoint templating is heuristic.** `/users/123` and
   `/campaigns/a1b2c3d4e5f6` both template to `.../{id}`; a numeric-looking
   static path segment (e.g. a literal `/v2/` version prefix that happens to
@@ -52,22 +49,6 @@ of what was once true stays visible.
 
 ## Phase 2 specific limits (replay + three-way comparison)
 
-- **Scrubbed recorded data vs. raw replay data mismatch.** Discovered via
-  manual CLI testing (not hidden): a segment captured through
-  `cmd/parity-capture` has PII (e.g. emails) pseudonymized by
-  `internal/scrub` before it's written. When `parity replay` replays those
-  requests against a live base build, the base build returns its *real*
-  (unscrubbed) data. Comparing the scrubbed recorded response against the
-  raw replay response then shows a spurious diff on every PII-bearing
-  field, tanking the fidelity score for reasons that have nothing to do
-  with the candidate build. `eval/harness/mutation_test.go` sidesteps this
-  by recording its baseline directly (unscrubbed) rather than through the
-  capture pipeline, which is why it reports fidelity=1.00 while a real
-  `parity replay` run against a capture-produced segment would not. The
-  real fix (not done this phase): either scrub the live replay response
-  with the same deterministic pseudonymization before diffing, or restore
-  the base/candidate database from an already-pseudonymized snapshot so
-  both sides are consistently pseudonymized. Tracked as Phase 2.5 follow-up.
 - **No Docker/Kubernetes `Environment`.** Only `ProcessEnvironment`
   (local subprocess) exists; see docs/plans/phase-2.md and ADR 0002.
 - **No outbound dependency stubbing wired in.** `internal/stub` does not
@@ -175,6 +156,80 @@ of what was once true stays visible.
 - **Requires a local PostgreSQL 16** (installed via Homebrew, ADR 0004)
   to exercise beyond compile-time; tests skip gracefully without one.
 
-## Resolved
+## Robustness hardening pass (post-Phase-6, not a numbered phase)
 
-(none yet — Phase 1 is the first phase)
+A focused pass fixing real correctness/reliability gaps found by
+re-reading the code with "what breaks in production" in mind, rather
+than adding new features. See `docs/decisions/0005-robustness-pass.md`.
+Everything below was verified by a new or updated test, not just
+reasoned about:
+
+- **Capture body-cap correctness bug, found and fixed.** The capture
+  proxy's request-body handling pre-read the body through a
+  `io.LimitReader` and replaced `r.Body` with only what it read — for any
+  upload larger than the 1MB capture cap, this silently truncated what
+  was actually forwarded to the real upstream service, not just what got
+  captured. Fixed with a `cappedBuffer` type (never errors on overflow,
+  so wrapping it in `io.TeeReader` can't short-circuit the real read) and
+  verified by `TestProxy_ForwardsFullBodyEvenWhenCaptureIsTruncated`,
+  which asserts the upstream receives the full body while only the
+  capped copy is captured.
+- **`LARGE_BODY_TRUNCATED` is now actually set** on exchanges whose
+  request or response body exceeded the capture cap (previously tracked
+  in this doc as a known gap; now verified by the same test above).
+- **Capture proxy shutdown no longer drops buffered exchanges.**
+  `Proxy.Run`'s stop function used to close a done channel and return
+  immediately, abandoning anything still sitting in the queue. It now
+  drains the queue into the sink before returning. Fail-open is about
+  the hot path staying fast under backpressure, not an excuse to lose
+  data on an orderly shutdown.
+- **Insecure default HMAC pseudonymization secret, found and fixed.**
+  `cmd/parity-capture` constructed its `scrub.Scrubber` without ever
+  reading a secret from config, so every real deployment would have
+  silently used `internal/scrub`'s hardcoded dev-default secret —
+  meaning pseudonymized values in any captured segment were trivially
+  reversible by anyone who read the source. Fixed by adding
+  `scrub.hmac_secret_env` to `parity.yaml` (names an environment
+  variable; the secret itself is never written to the config file) and
+  wiring it through `cmd/parity-capture`, which now logs a loud warning
+  if it falls back to the insecure default instead of doing so silently.
+- **Scrubbed-recording-vs-raw-replay fidelity bug, fixed.** This was the
+  headline Phase 2 limitation: a capture-produced segment's recorded
+  response is PII-scrubbed, but a live replay response is not, so every
+  PII-bearing field looked like a spurious regression. Fixed by adding
+  an optional `Scrubber` to `internal/orchestrate.Config` — when set, it
+  scrubs every live replay response (base-A, base-B, and candidate)
+  before any comparison, so both sides are consistently pseudonymized.
+  Wired into `parity replay` as `--hmac-secret-env` (must match whatever
+  secret `parity-capture` used to produce the segment). Verified by
+  `TestRun_ScrubberFixesPIIFalsePositive`, which reproduces the bug
+  (fidelity=0.00 without the fix) and then shows it fixed (fidelity=1.0,
+  zero clusters) in the same test run.
+- **Truncated segments no longer hard-fail `parity replay`.**
+  `orchestrate.LoadExchanges` used to treat `recording.ErrTruncated` as a
+  fatal error, discarding every exchange successfully read before the
+  truncation point along with it — directly contradicting
+  `internal/recording`'s own stance that earlier records in a truncated
+  segment remain valid. Fixed to return the partial results.
+- **Subprocess zombie/hang risk in `ProcessEnvironment`, fixed.**
+  `Teardown` called `Process.Kill()` but never `Wait()`ed on the
+  process, leaving a zombie on Unix until the parent exited — a real
+  cost for a long-running process (the MCP server) that provisions many
+  short-lived replay environments over its lifetime. Also, a subprocess
+  that crashed immediately (bad binary, wrong port) used to make
+  `Provision` spin for the full 5s health-check timeout before reporting
+  a confusing "timed out" error. Fixed with a single background
+  `cmd.Wait()` goroutine (deduplicated via `sync.Once` so it's safe for
+  both the Provision-failure path and Teardown to trigger cleanup) that
+  both reaps the process and lets health-checking fail fast on an early
+  exit. Verified by `TestProcessEnvironment_DetectsEarlyCrashQuickly`
+  (209ms instead of 5s) and `TestProcessEnvironment_TeardownReapsAndIsIdempotent`
+  (proves calling `Teardown` twice, or after a failed `Provision`, never
+  hangs).
+- All of the above re-verified under `go test -race` on the touched
+  packages (`internal/capture`, `internal/replay`, `internal/orchestrate`,
+  `eval/harness`) — clean, no new data races introduced.
+
+## Resolved (phase-numbered items that were fixed later, not in the robustness pass above)
+
+(none yet)

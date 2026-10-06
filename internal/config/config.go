@@ -34,6 +34,13 @@ type ScrubConfig struct {
 	DefaultPolicy string            `yaml:"default_policy"`
 	HeadersAllow  []string          `yaml:"headers_allow"`
 	JSONPaths     map[string]string `yaml:"json_paths"`
+	// HMACSecretEnv names an environment variable holding the per-tenant
+	// pseudonymization secret (see internal/scrub). The secret itself is
+	// never written here or anywhere in parity.yaml — only the name of
+	// the env var that holds it — so a committed config file never leaks
+	// the secret. If unset, the capture binary falls back to an insecure
+	// well-known default and logs a loud warning; see cmd/parity-capture.
+	HMACSecretEnv string `yaml:"hmac_secret_env"`
 }
 
 // Load reads and validates a parity.yaml file at path.

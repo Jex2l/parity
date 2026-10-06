@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,15 @@ type ProcessEnvironment struct {
 
 	cmd  *exec.Cmd
 	port int
+
+	// reap deduplicates process cleanup: exactly one goroutine ever calls
+	// cmd.Wait() (calling it twice is a documented bug in os/exec), and
+	// both the Provision failure path and Teardown can trigger it, so
+	// whichever gets there first does the real work and everyone else
+	// just waits on reapDone.
+	reapOnce sync.Once
+	reapDone chan struct{}
+	waitErr  error
 }
 
 // NewProcessEnvironment creates a ProcessEnvironment. portEnvVar is the
@@ -32,6 +42,15 @@ func NewProcessEnvironment(portEnvVar, healthPath string) *ProcessEnvironment {
 	return &ProcessEnvironment{PortEnvVar: portEnvVar, HealthPath: healthPath}
 }
 
+// freePort finds a currently-unused TCP port by binding to port 0 and
+// immediately releasing it. This has an inherent, unavoidable
+// TOCTOU race in any "find a free port, then let someone else bind it"
+// scheme — something else could grab the port in the gap between this
+// Close and the subprocess's own bind. It's accepted here (consistent
+// with how most local dev tooling allocates ports) rather than solved by
+// passing a pre-bound listener fd into the child process, which would be
+// considerably more invasive for a replay-only tool. If flakiness from
+// this race is ever observed in practice, that's the fix to reach for.
 func freePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -62,20 +81,38 @@ func (e *ProcessEnvironment) Provision(ctx context.Context, build BuildRef) (End
 		return Endpoint{}, fmt.Errorf("replay: start %s: %w", build.Name, err)
 	}
 	e.cmd = cmd
+	e.reapDone = make(chan struct{})
+
+	// Exactly one call to cmd.Wait() ever happens, in this goroutine,
+	// regardless of whether the process becomes healthy, crashes early,
+	// or is later killed by Teardown — see reap().
+	go func() {
+		e.waitErr = cmd.Wait()
+		close(e.reapDone)
+	}()
 
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
-	if err := waitHealthy(base+e.HealthPath, 5*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		return Endpoint{}, fmt.Errorf("replay: %s did not become healthy: %w", build.Name, err)
+	healthErr := waitHealthyOrExit(base+e.HealthPath, 5*time.Second, e.reapDone)
+	if healthErr != nil {
+		e.reap() // the process either already exited or needs killing; either way, reap it
+		return Endpoint{}, fmt.Errorf("replay: %s did not become healthy: %w", build.Name, healthErr)
 	}
 	return Endpoint{BaseURL: base}, nil
 }
 
-func waitHealthy(url string, timeout time.Duration) error {
+// waitHealthyOrExit polls url until it responds, the timeout elapses, or
+// reapDone fires first (the subprocess died on its own), whichever comes
+// first.
+func waitHealthyOrExit(url string, timeout time.Duration, reapDone <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	var lastErr error
 	for time.Now().Before(deadline) {
+		select {
+		case <-reapDone:
+			return fmt.Errorf("process exited before becoming healthy")
+		default:
+		}
 		resp, err := client.Get(url)
 		if err == nil {
 			resp.Body.Close()
@@ -91,10 +128,33 @@ func waitHealthy(url string, timeout time.Duration) error {
 // in Phase 2; database snapshot restore is a later-phase concern).
 func (e *ProcessEnvironment) Reset(ctx context.Context) error { return nil }
 
-// Teardown kills the subprocess.
+// Teardown kills the subprocess and reaps it. Killing without reaping
+// (Wait) leaves a zombie process on Unix until the parent itself exits —
+// harmless for a single one-shot CLI invocation, but a real cost in a
+// long-running process (the MCP server, a control plane) that provisions
+// many short-lived replay environments over its lifetime. Safe to call
+// even if the process already exited on its own (e.g. it crashed before
+// Teardown was ever reached).
 func (e *ProcessEnvironment) Teardown(ctx context.Context) error {
 	if e.cmd == nil || e.cmd.Process == nil {
 		return nil
 	}
-	return e.cmd.Process.Kill()
+	e.reap()
+	// os/exec reports "process already finished" if it had already
+	// exited by the time we got here — not a real failure for a
+	// best-effort Teardown, so it's deliberately not surfaced as an
+	// error; e.waitErr (from the one real Wait() call) is the one that
+	// matters, and it's merely informational here (an environment
+	// that's been torn down is expected to have a non-zero/killed exit).
+	return nil
+}
+
+// reap kills the process (best-effort — it may have already exited) and
+// blocks until the single background Wait() call has completed, however
+// it was triggered. Safe to call more than once or concurrently.
+func (e *ProcessEnvironment) reap() {
+	e.reapOnce.Do(func() {
+		_ = e.cmd.Process.Kill()
+	})
+	<-e.reapDone
 }

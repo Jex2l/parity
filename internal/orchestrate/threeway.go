@@ -7,15 +7,18 @@ package orchestrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/jex2l/parity/internal/diff"
 	"github.com/jex2l/parity/internal/perf"
+	"github.com/jex2l/parity/internal/recording"
 	pb "github.com/jex2l/parity/internal/recording/pb"
 	"github.com/jex2l/parity/internal/replay"
 	"github.com/jex2l/parity/internal/report"
+	"github.com/jex2l/parity/internal/scrub"
 )
 
 // Config describes one three-way comparison run.
@@ -24,6 +27,15 @@ type Config struct {
 	Candidate replay.BuildRef
 	NewEnv    func() replay.Environment // factory so base-A, base-B, candidate each get an isolated environment
 	Concurrency int
+	// Scrubber, if set, is applied to every live replay response body
+	// before it's compared against anything — including the recorded
+	// response, which (if it came from a real `parity-capture` segment)
+	// was already scrubbed at capture time. Without this, every
+	// PII-bearing field looks like a spurious regression, because a raw
+	// live value never matches its own pseudonymized recorded form. Pass
+	// the same Scrubber (same HMAC secret) that produced the segment.
+	// See docs/limits.md's former "Phase 2" entry on this — fixed here.
+	Scrubber *scrub.Scrubber
 }
 
 // Run provisions base-A, base-B, and candidate, replays exchanges against
@@ -57,6 +69,12 @@ func Run(ctx context.Context, cfg Config, exchanges []*pb.Exchange) (report.Repo
 	resultsA := sched.Replay(ctx, epA, exchanges)
 	resultsB := sched.Replay(ctx, epB, exchanges)
 	resultsC := sched.Replay(ctx, epC, exchanges)
+
+	if cfg.Scrubber != nil {
+		scrubResults(cfg.Scrubber, resultsA)
+		scrubResults(cfg.Scrubber, resultsB)
+		scrubResults(cfg.Scrubber, resultsC)
+	}
 
 	// Group A/B results per endpoint template to learn one noise model per
 	// endpoint (volatility is endpoint-specific: a list endpoint's order
@@ -157,13 +175,27 @@ func detectPerfRegressions(exchanges []*pb.Exchange, resultsA, resultsB, results
 	return out
 }
 
+// scrubResults applies scrubber to every result's body in place.
+func scrubResults(scrubber *scrub.Scrubber, results []replay.ExchangeResult) {
+	for i := range results {
+		results[i].Body = scrubber.ScrubBody(results[i].Body)
+	}
+}
+
 // LoadExchanges reads up to limit exchanges from a recording reader
-// (limit<=0 means all).
+// (limit<=0 means all). A segment that ends mid-record (ErrTruncated)
+// is not treated as fatal: whatever was read before the truncation point
+// is returned, matching internal/recording's own stance that earlier
+// records in a truncated segment remain valid and must not be thrown
+// away just because the tail is damaged. Any other error is fatal.
 func LoadExchanges(next func() (*pb.Exchange, error), limit int) ([]*pb.Exchange, error) {
 	var out []*pb.Exchange
 	for limit <= 0 || len(out) < limit {
 		ex, err := next()
 		if err == io.EOF {
+			break
+		}
+		if errors.Is(err, recording.ErrTruncated) {
 			break
 		}
 		if err != nil {

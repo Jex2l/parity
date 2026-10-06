@@ -175,6 +175,19 @@ func (s *Scrubber) scrubHeaders(headers []*pb.Header, path string, report *Repor
 	return out
 }
 
+// ScrubBody applies the same pattern-detection/pseudonymization rules
+// ScrubExchange uses, directly to a raw body. Exposed so callers that
+// need to scrub something other than a full recorded Exchange — notably
+// `internal/orchestrate`, which must apply the *same* scrubbing to a
+// live replay response before diffing it against an already-scrubbed
+// recorded response, or every PII-bearing field looks like a spurious
+// regression (see docs/limits.md's Phase 2 entry on this exact bug).
+// The report of what was redacted is discarded; callers that need it
+// should use ScrubExchange instead.
+func (s *Scrubber) ScrubBody(body []byte) []byte {
+	return s.scrubBody(body, "", "$", &Report{})
+}
+
 // scrubBody runs pattern detection over raw text (JSON or not); for JSON
 // bodies this is a pragmatic v1 approach (regex over the serialized form)
 // rather than a full JSON-path walk — sufficient for pattern-based PII

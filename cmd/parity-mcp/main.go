@@ -17,6 +17,7 @@ import (
 	"github.com/jex2l/parity/internal/recording"
 	"github.com/jex2l/parity/internal/replay"
 	"github.com/jex2l/parity/internal/report"
+	"github.com/jex2l/parity/internal/scrub"
 	"github.com/jex2l/parity/internal/testgen"
 )
 
@@ -71,6 +72,12 @@ type runReplayArgs struct {
 	Sample         int               `json:"sample,omitempty" jsonschema:"max number of exchanges to replay; 0 means all"`
 	PortEnv        string            `json:"port_env,omitempty" jsonschema:"env var the build reads its listen port from; default DEMO_ADDR"`
 	HealthPath     string            `json:"health_path,omitempty" jsonschema:"path polled to detect readiness; default /health"`
+	// HMACSecretEnv names an environment variable holding the same
+	// pseudonymization secret `parity-capture` used to produce Segment.
+	// If the segment came from a real capture (PII-scrubbed), omitting
+	// this makes every PII-bearing field look like a spurious diff — see
+	// docs/limits.md's robustness-pass entry on this.
+	HMACSecretEnv string `json:"hmac_secret_env,omitempty" jsonschema:"env var holding the HMAC secret parity-capture used to scrub this segment, if any"`
 }
 
 type runReplayOutput struct {
@@ -101,6 +108,11 @@ func runReplayTool(ctx context.Context, _ *mcp.CallToolRequest, args runReplayAr
 			return replay.NewProcessEnvironment(portEnv, healthPath)
 		},
 		Concurrency: 8,
+	}
+	if args.HMACSecretEnv != "" {
+		if secret := os.Getenv(args.HMACSecretEnv); secret != "" {
+			cfg.Scrubber = scrub.New(scrub.Config{HMACSecret: []byte(secret)})
+		}
 	}
 	rep, err := orchestrate.Run(ctx, cfg, exchanges)
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/jex2l/parity/internal/recording"
 	"github.com/jex2l/parity/internal/replay"
 	"github.com/jex2l/parity/internal/retention"
+	"github.com/jex2l/parity/internal/scrub"
 	"github.com/jex2l/parity/internal/testgen"
 
 	orchestrate "github.com/jex2l/parity/internal/orchestrate"
@@ -65,7 +66,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   parity inspect <segment-path> [--jsonl]
-  parity replay --segment <path> --base-cmd <path> --candidate-cmd <path> [--candidate-env K=V] [--sample N] [--out report.json]
+  parity replay --segment <path> --base-cmd <path> --candidate-cmd <path> [--candidate-env K=V] [--sample N] [--out report.json] [--hmac-secret-env NAME]
   parity report <report.json>
   parity test generate --segment <path> [--sample N] --out <cases.json>
   parity test run --cases <cases.json> --cmd <path> [--port-env NAME] [--health-path /path]
@@ -124,7 +125,7 @@ func runInspect(args []string) int {
 func printWriter(w io.Writer) io.Writer { return w }
 
 func runReplay(args []string) int {
-	var segment, baseCmd, candidateCmd, out, portEnv, healthPath string
+	var segment, baseCmd, candidateCmd, out, portEnv, healthPath, hmacSecretEnv string
 	var sample, concurrency int
 	candidateEnv := map[string]string{}
 
@@ -164,6 +165,9 @@ func runReplay(args []string) int {
 		case "--health-path":
 			i++
 			healthPath = args[i]
+		case "--hmac-secret-env":
+			i++
+			hmacSecretEnv = args[i]
 		}
 	}
 	if segment == "" || baseCmd == "" || candidateCmd == "" {
@@ -194,6 +198,23 @@ func runReplay(args []string) int {
 			return replay.NewProcessEnvironment(portEnv, healthPath)
 		},
 		Concurrency: concurrency,
+	}
+	// If the segment was produced by `parity-capture` with scrubbing on,
+	// the recorded responses are pseudonymized. Live replay responses
+	// are not, unless we scrub them the same way before comparing — see
+	// internal/orchestrate.Config.Scrubber's doc comment for why this
+	// matters (it used to silently tank fidelity on any PII-bearing
+	// field). Pass the SAME secret parity-capture used, or fidelity will
+	// look fine structurally but pseudonymized values still won't match
+	// (a wrong secret is observably different from no scrubbing at all —
+	// callers should set --hmac-secret-env to whatever parity-capture
+	// used, not just "any value").
+	if hmacSecretEnv != "" {
+		if secret := os.Getenv(hmacSecretEnv); secret != "" {
+			cfg.Scrubber = scrub.New(scrub.Config{HMACSecret: []byte(secret)})
+		} else {
+			fmt.Fprintf(os.Stderr, "parity replay: --hmac-secret-env %q is set but that variable is empty/unset; proceeding without response scrubbing (fidelity may look artificially low against a scrubbed segment)\n", hmacSecretEnv)
+		}
 	}
 
 	rep, err := orchestrate.Run(context.Background(), cfg, exchanges)

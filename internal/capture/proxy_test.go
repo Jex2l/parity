@@ -1,9 +1,12 @@
 package capture
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,6 +129,93 @@ func TestProxy_FailsOpenUnderBackpressure(t *testing.T) {
 		t.Fatalf("expected some drops under backpressure, got 0 (test setup may not be inducing backpressure)")
 	}
 	t.Logf("%d requests in %v, captured=%d dropped=%d", n, elapsed, p.Metrics.Captured, p.Metrics.Dropped)
+}
+
+// recordingSink captures every exchange it sees, for assertions.
+type recordingSink struct {
+	mu        sync.Mutex
+	exchanges []*pb.Exchange
+}
+
+func (s *recordingSink) Accept(ex *pb.Exchange) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.exchanges = append(s.exchanges, ex)
+}
+
+func (s *recordingSink) latest() *pb.Exchange {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.exchanges) == 0 {
+		return nil
+	}
+	return s.exchanges[len(s.exchanges)-1]
+}
+
+// TestProxy_ForwardsFullBodyEvenWhenCaptureIsTruncated is the
+// correctness regression test for the capped-buffer fix: a request body
+// larger than the 1MB capture cap must still reach upstream in full. An
+// earlier version of this proxy pre-read the body through a LimitReader
+// and replaced r.Body with only what it read, silently corrupting any
+// upload over the cap before it reached the real service.
+func TestProxy_ForwardsFullBodyEvenWhenCaptureIsTruncated(t *testing.T) {
+	bodySize := maxCapturedBodyBytes + 1024 // comfortably over the cap
+	bigBody := bytes.Repeat([]byte("A"), bodySize)
+
+	var receivedLen int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		receivedLen = len(b)
+		w.WriteHeader(http.StatusOK)
+	})
+	upstream := httptest.NewServer(mux)
+	defer upstream.Close()
+
+	u, _ := url.Parse(upstream.URL)
+	p := NewProxy(Options{
+		Upstream:  u,
+		Templater: NewTemplater(),
+		Sampler:   NewCompositeSampler(Config{DefaultRate: 1.0}),
+		Service:   "test-svc",
+	})
+	sink := &recordingSink{}
+	stop := p.Run(sink)
+	defer stop()
+
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	resp, err := http.Post(front.URL+"/upload", "application/octet-stream", bytes.NewReader(bigBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	resp.Body.Close()
+
+	if receivedLen != bodySize {
+		t.Fatalf("upstream received %d bytes, want the full %d (capture must never truncate what's forwarded)", receivedLen, bodySize)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for sink.latest() == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	ex := sink.latest()
+	if ex == nil {
+		t.Fatalf("expected the exchange to be captured")
+	}
+	if len(ex.GetInbound().GetBody()) != maxCapturedBodyBytes {
+		t.Fatalf("captured body = %d bytes, want exactly the %d-byte cap", len(ex.GetInbound().GetBody()), maxCapturedBodyBytes)
+	}
+	foundFlag := false
+	for _, f := range ex.GetFidelityFlags() {
+		if f == pb.FidelityFlag_LARGE_BODY_TRUNCATED {
+			foundFlag = true
+		}
+	}
+	if !foundFlag {
+		t.Fatalf("expected LARGE_BODY_TRUNCATED to be set on an exchange whose body exceeded the capture cap, flags=%v", ex.GetFidelityFlags())
+	}
 }
 
 func TestTemplater(t *testing.T) {

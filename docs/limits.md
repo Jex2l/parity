@@ -104,6 +104,26 @@ of what was once true stays visible.
   doesn't know to mask the same way. Tracked as a follow-up to unify the
   two.
 
+## Phase 4 specific limits (GitHub integration, classifier, agent integration)
+
+- **No live GitHub App.** Not registered, not installed on any repo, no
+  webhook ever received, no real check run or PR comment ever posted.
+  `internal/gh` is correct against a fake GitHub API (`httptest`) and
+  that's as far as it's been verified.
+- **No LLM classifier.** Only the required-first heuristic baseline
+  (`internal/classify`) exists. No model endpoint is configured in this
+  environment to build/test one against.
+- **No control-plane run state machine / Postgres.** The spec's
+  `queued → provisioning → ... → done|failed` persisted state machine
+  (6.9) and `cmd/parity-controlplane` don't exist yet.
+- **MCP server untested against an external client.** Verified via the
+  Go SDK's in-memory transport with a real client/server session (genuine
+  protocol compliance), never against Claude Desktop/Code or another
+  separate MCP client process over stdio.
+- **Classifier confidence numbers are not calibrated** against a labeled
+  eval set (spec 6.7.3) — they're hand-picked per rule, documented as such
+  in code comments, not presented as a measured probability.
+
 ## Resolved
 
 (none yet — Phase 1 is the first phase)

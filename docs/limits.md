@@ -150,6 +150,31 @@ of what was once true stays visible.
   performance budgets.** All three need infrastructure this environment
   lacks (an artifact store/control plane, a load-testing rig).
 
+## Phase 6 specific limits (stateful fidelity spike)
+
+- **Application-level recording, not wire-protocol capture.**
+  `internal/dbrecord` records at the `database/sql` call boundary (a
+  narrow `DB` interface), not actual Postgres frontend/backend protocol
+  bytes. Only code written against that interface benefits. See
+  docs/plans/phase-6.md for the full reasoning.
+- **No transactions, prepared-statement reuse, COPY, or LISTEN/NOTIFY.**
+  Each `ExecContext`/`QueryContext` call is recorded independently;
+  anything relying on connection/transaction state across calls isn't
+  modeled.
+- **Exact match only.** `ReplayDB` matches by (normalized SQL, exact
+  argument values); no nearest-match fallback, no parameter-shape
+  matching the way `internal/stub`'s outbound-call matcher does. An
+  unmatched call returns `ErrNoMatch` honestly rather than guessing.
+- **Not integrated into the replay/orchestrate pipeline.** This is a
+  standalone package-level spike (as the spec itself scoped it) — it is
+  not wired into `cmd/parity replay` or `eval/demo-service`.
+- **No write-regression detection.** If a candidate build's write logic
+  itself changed, replaying a read against the *base* build's recorded
+  write result would never show that — recorded, not solved, per the
+  spec's own framing of this limitation.
+- **Requires a local PostgreSQL 16** (installed via Homebrew, ADR 0004)
+  to exercise beyond compile-time; tests skip gracefully without one.
+
 ## Resolved
 
 (none yet — Phase 1 is the first phase)

@@ -6,11 +6,28 @@ Parity captures sanitized production traffic and, on every pull request,
 replays it against the PR's build in an isolated environment, then reports
 what actually changed — not what unit tests happened to check.
 
-**Status: Phase 1 of 6 complete.** See `docs/plans/` for the phased build
-plan and `docs/decisions/` for the ADRs behind every non-obvious choice.
-Phase 1 proves the capture → record pipeline end to end; replay, diffing,
-GitHub integration, and the classifier land in later phases and are not
-built yet. Do not treat this repo as production-ready.
+**Status: all 6 phases of the original build plan have a working,
+tested slice.** See `docs/plans/` for each phase's plan + honest summary
+of what was verified vs. deferred, and `docs/decisions/` for the ADRs
+behind every non-obvious choice. **Read `docs/limits.md` before trusting
+any of this.** In particular: no real GitHub App has ever been
+registered/installed (Phase 4), no Kubernetes cluster was available to
+test the Kubernetes environment driver or `helm install` the chart
+(Phase 5), and the LLM classifier was never built (no model endpoint in
+this environment — only the heuristic baseline exists). Do not treat
+this repo as production-ready; treat it as a working, end-to-end-tested
+foundation with explicitly named gaps.
+
+Capture → recording (Phase 1), three-way replay + diffing (Phase 2),
+performance regression detection + test generation (Phase 3), the
+heuristic classifier + GitHub client + MCP server (Phase 4), gRPC
+diffing + privacy gating + retention (Phase 5), and a database
+record/replay fidelity spike against a real Postgres (Phase 6) are all
+implemented, unit tested, and — where the dependency was actually
+available in this environment — exercised end to end against a real
+upstream service, a real gRPC server, or a real database. Where a
+dependency wasn't available (a live GitHub App, a Kubernetes cluster),
+that is stated plainly in `docs/limits.md` rather than glossed over.
 
 ## 5-minute quickstart (Phase 1: capture only)
 

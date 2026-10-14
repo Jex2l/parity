@@ -1,0 +1,47 @@
+# One-off validation run for action.yml / cmd/parity-ci (phase 8), using
+# this repo's own eval/demo-service as both base and candidate build.
+# Path-scoped to only the files this self-test touches, so it never fires
+# on unrelated PRs. Delete this file (and the branch) once the run has
+# been inspected — see docs/plans/phase-8-parity-ci.md's "known gaps".
+name: parity-ci-selftest
+
+on:
+  pull_request:
+    paths:
+      - "eval/demo-service/**"
+      - ".github/parity-ci-selftest/**"
+      - ".github/workflows/parity-ci-selftest.yml"
+
+permissions:
+  pull-requests: write
+  checks: write
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build candidate (this PR's demo-service)
+        run: go build -o "$RUNNER_TEMP/candidate-demo-service" ./eval/demo-service
+
+      - name: Build base (main's demo-service)
+        run: |
+          git fetch origin main
+          git worktree add /tmp/base-checkout origin/main
+          (cd /tmp/base-checkout && go build -o "$RUNNER_TEMP/base-demo-service" ./eval/demo-service)
+
+      - uses: ./
+        with:
+          segment: .github/parity-ci-selftest/seg-000001.zst
+          base-cmd: ${{ runner.temp }}/base-demo-service
+          candidate-cmd: ${{ runner.temp }}/candidate-demo-service
+          port-env: DEMO_ADDR
+          health-path: /health
+          github-token: ${{ secrets.GITHUB_TOKEN }}

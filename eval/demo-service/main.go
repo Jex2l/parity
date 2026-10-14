@@ -198,7 +198,10 @@ func main() {
 				total += o.Total
 			}
 		}
-		writeJSON(w, 200, map[string]any{"total_revenue": total, "order_count": len(orders), "generated_at": time.Now().UTC().Format(time.RFC3339)})
+		// Self-test-only change (test/parity-ci-selftest branch): adds a
+		// field so parity-ci's GitHub Action run has a real behavioral
+		// diff to detect, instead of a trivially clean report.
+		writeJSON(w, 200, map[string]any{"total_revenue": total, "order_count": len(orders), "generated_at": time.Now().UTC().Format(time.RFC3339), "currency": "USD"})
 	})
 
 	// GET /slow — deliberately slow endpoint for perf-regression testing (Phase 3)

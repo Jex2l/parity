@@ -50,11 +50,13 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version-file: ${{ github.action_path }}/go.mod
-
+    # Deliberately does NOT run actions/setup-go here: a consumer's own
+    # workflow steps already need Go on PATH to build their base/candidate
+    # commands before calling this action, and a second actions/setup-go
+    # with caching enabled collides with the first one's already-populated
+    # module cache (confirmed live: "tar: ... Cannot open: File exists" on
+    # jex2l/parity PR #1 before this fix). If Go genuinely isn't set up
+    # yet, add actions/setup-go to your own workflow before this step.
     - name: Build parity + parity-ci
       shell: bash
       run: |

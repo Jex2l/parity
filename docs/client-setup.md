@@ -5,8 +5,13 @@ bottom; every step here was just run for real, on a separate throwaway
 repo, before this doc was written — not from memory. If you hit
 anything not covered here, treat that as a doc bug, not a you problem.
 
-**Use `jex2l/parity@v0.1.1` or later.** `v0.1.0` fails on every real
-install — see `docs/plans/phase-8-parity-ci.md` for why.
+**Use `jex2l/parity@v0.1.2` or later.** `v0.1.0` fails on every real
+install (a cross-module build bug); `v0.1.1` installs and detects
+diffs correctly but its GitHub check fails on *every* PR regardless of
+how confidently intentional the change looks, which trains reviewers to
+ignore it — `v0.1.2` fixes that by actually using the classification to
+decide pass/fail. Both fixes are written up in full in
+`docs/plans/phase-8-parity-ci.md`.
 
 ## What you need before starting
 
@@ -20,8 +25,8 @@ install — see `docs/plans/phase-8-parity-ci.md` for why.
 ## Step 1 — install `parity` and `parity-capture` locally
 
 ```bash
-go install github.com/jex2l/parity/cmd/parity@v0.1.1
-go install github.com/jex2l/parity/cmd/parity-capture@v0.1.1
+go install github.com/jex2l/parity/cmd/parity@v0.1.2
+go install github.com/jex2l/parity/cmd/parity-capture@v0.1.2
 ```
 
 ## Step 2 — write `parity.yaml` in your repo root
@@ -83,13 +88,18 @@ needs.
 ## Step 5 — open a PR and watch it work
 
 That's it. On the next PR, you'll see a `Parity / behavioral diff`
-check and a PR comment, automatically. **The check fails whenever any
-behavioral difference is found, regardless of whether it looks
-intentional** — that's deliberate: the comment's classification
-(`LIKELY_INTENDED` / `LIKELY_UNINTENDED` / `UNCERTAIN`) is context for a
-human reviewer, not an auto-pass gate. A real, confirmed example from
-validating this exact flow:
+check and a PR comment, automatically. **The check fails only when at
+least one changed cluster is classified `UNCERTAIN` or
+`LIKELY_UNINTENDED`** — a cluster the classifier confidently calls
+`LIKELY_INTENDED` shows up as a visible, informative, non-blocking
+(neutral) check instead of a hard failure. (Earlier `v0.1.1` failed on
+every single diff regardless of classification — confirmed live on two
+back-to-back test PRs before `v0.1.2` fixed it; see
+`docs/plans/phase-8-parity-ci.md`.) Two real, confirmed examples from
+validating this exact flow — same tool, two different outcomes for two
+different kinds of change:
 
+**An additive, low-severity change (passes, neutral):**
 ```
 ## Parity / behavioral diff
 
@@ -101,6 +111,20 @@ Replayed 500 requests. Fidelity: 100%.
   Changed paths: $[id=1].sku, $[id=2].sku, $[id=3].sku
   Why LIKELY_INTENDED (55% confidence): only new fields were added
   (low severity), consistent with an intentional additive change
+```
+
+**A value change with no supporting context (fails, correctly):**
+```
+## Parity / behavioral diff
+
+Replayed 500 requests. Fidelity: 100%.
+
+1 cluster(s) found (500 signal change(s), 0 absorbed as noise).
+
+[MEDIUM] /widgets — UNCERTAIN (500 occurrences)
+  Changed paths: $[id=1].price_cents
+  Why UNCERTAIN (30% confidence): no strong structural signal either
+  way; needs human (or LLM classifier) judgment
 ```
 
 ## Known rough edges, named honestly

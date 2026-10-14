@@ -150,8 +150,42 @@ example didn't).
 
 Tagged as `v0.1.0` (the pre-fix version — never promoted as
 install-ready) and `v0.1.1` (the version that's actually been installed
-successfully on a separate repo). **If you're setting this up for a
-client, use `v0.1.1` or later, not `v0.1.0`.**
+successfully on a separate repo).
+
+## Update: v0.1.1's check failed on every single PR (v0.1.2)
+
+`v0.1.1` correctly built, replayed, detected diffs, classified them,
+and posted — confirmed above. What it got wrong: `outcome()` decided
+the GitHub check's pass/fail purely from `len(rep.Clusters) > 0`,
+completely ignoring the classification it had just computed for the PR
+comment. Retesting `v0.1.1` on two more real PRs against
+`jex2l/parity-client-test` — one adding a field (classified
+`LIKELY_INTENDED` at 55%), one changing a value (classified `UNCERTAIN`
+at 30%) — made this obvious: **both failed the check.** Every PR that
+touches the service at all would fail, confidently-intentional changes
+included. A check that's always red is equivalent to no check at all —
+worse, actually, since it trains reviewers to stop reading it.
+
+Fixed in `v0.1.2`: `outcome()` now takes the cluster classifications
+and only returns `ConclusionFailure`/`exitUnintended` when at least one
+cluster is `UNCERTAIN` or `LIKELY_UNINTENDED`. A report where every
+cluster is `LIKELY_INTENDED` gets a new exit code (`exitLikelyIntended`
+= 15) mapped to `ConclusionNeutral` — visible and informative, not
+blocking. `action.yml`'s `case` statement needed a matching branch for
+15 too — without it, that exit code fell into the `*)` default and the
+step aborted as an infra error, which would have reintroduced a
+different "always looks broken" failure mode.
+
+Re-validated on two fresh PRs against the same test repo, one for each
+outcome: the additive/`LIKELY_INTENDED` case now shows a **green
+check** (`conclusion: neutral`, confirmed via the GitHub API, not just
+the UI), and the value-change/`UNCERTAIN` case still correctly shows
+**red** (`conclusion: failure`) — proving the fix doesn't just make
+everything pass, it makes the right things pass.
+
+**If you're setting this up for a client, use `v0.1.2` or later** —
+`v0.1.1` technically works but will make the check look permanently
+broken; `v0.1.0` fails outright on install.
 
 ## Known gaps
 

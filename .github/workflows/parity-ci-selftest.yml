@@ -31,10 +31,10 @@ jobs:
       - name: Build candidate (this PR's demo-service)
         run: go build -o "$RUNNER_TEMP/candidate-demo-service" ./eval/demo-service
 
-      - name: Build base (main's demo-service)
+      - name: Build base (the PR's base branch, whatever it's named)
         run: |
-          git fetch origin main
-          git worktree add /tmp/base-checkout origin/main
+          git fetch origin "${{ github.event.pull_request.base.ref }}"
+          git worktree add /tmp/base-checkout "origin/${{ github.event.pull_request.base.ref }}"
           (cd /tmp/base-checkout && go build -o "$RUNNER_TEMP/base-demo-service" ./eval/demo-service)
 
       - uses: ./

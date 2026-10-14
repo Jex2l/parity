@@ -1,0 +1,115 @@
+name: "Parity CI"
+description: >
+  Replays recent production traffic against this PR's build and posts
+  the behavioral diff as a check run + PR comment. Fails the check only
+  on real behavioral differences, not on unit-test gaps — see README.md.
+author: "Jeel Patel"
+branding:
+  icon: "git-pull-request"
+  color: "blue"
+
+inputs:
+  segment:
+    description: "Path to the capture segment (.zst) to replay, relative to the repo root."
+    required: true
+  base-cmd:
+    description: "Command that starts the BASE build (e.g. main branch), reading its port from --port-env."
+    required: true
+  candidate-cmd:
+    description: "Command that starts the CANDIDATE build (this PR), reading its port from --port-env."
+    required: true
+  port-env:
+    description: "Env var name the started process reads its listen port from."
+    required: false
+    default: "DEMO_ADDR"
+  health-path:
+    description: "HTTP path used to confirm a started build is ready."
+    required: false
+    default: "/health"
+  sample:
+    description: "Max number of recorded exchanges to replay (0 = all)."
+    required: false
+    default: "0"
+  hmac-secret-env:
+    description: "Env var holding the HMAC secret parity-capture used for scrubbing, if the segment is scrubbed."
+    required: false
+    default: ""
+  github-token:
+    description: "Token used to post the check run and PR comment. Needs `pull-requests: write` and `checks: write`."
+    required: true
+  check-name:
+    description: "Name shown on the GitHub check run."
+    required: false
+    default: "Parity / behavioral diff"
+
+outputs:
+  conclusion:
+    description: "success | failure | neutral"
+    value: ${{ steps.post.outputs.conclusion }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+
+    - name: Build parity + parity-ci
+      shell: bash
+      run: |
+        go build -o "$RUNNER_TEMP/parity" "${{ github.action_path }}/cmd/parity"
+        go build -o "$RUNNER_TEMP/parity-ci" "${{ github.action_path }}/cmd/parity-ci"
+
+    - name: Replay candidate against base
+      shell: bash
+      env:
+        HMAC_SECRET_VALUE: ${{ env[inputs.hmac-secret-env] }}
+      run: |
+        ARGS=(
+          replay
+          --segment "${{ inputs.segment }}"
+          --base-cmd "${{ inputs.base-cmd }}"
+          --candidate-cmd "${{ inputs.candidate-cmd }}"
+          --port-env "${{ inputs.port-env }}"
+          --health-path "${{ inputs.health-path }}"
+          --sample "${{ inputs.sample }}"
+          --out "$RUNNER_TEMP/parity-report.json"
+        )
+        if [ -n "${{ inputs.hmac-secret-env }}" ]; then
+          ARGS+=(--hmac-secret-env "${{ inputs.hmac-secret-env }}")
+        fi
+        # Exit code is informational here; parity-ci below re-derives the
+        # same outcome from report.json so the workflow's pass/fail comes
+        # from one place, not two commands disagreeing.
+        "$RUNNER_TEMP/parity" "${ARGS[@]}" || true
+
+    - name: Post results to the PR
+      id: post
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        "$RUNNER_TEMP/parity-ci" \
+          --report "$RUNNER_TEMP/parity-report.json" \
+          --owner "${{ github.repository_owner }}" \
+          --repo "${{ github.event.repository.name }}" \
+          --pr "$PR_NUMBER" \
+          --sha "${{ github.event.pull_request.head.sha }}" \
+          --token-env GITHUB_TOKEN \
+          --check-name "${{ inputs.check-name }}" \
+          --changed-files "$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}... | paste -sd, -)" \
+          --pr-title "${{ github.event.pull_request.title }}"
+        code=$?
+        case $code in
+          0)  echo "conclusion=success" >> "$GITHUB_OUTPUT" ;;
+          10) echo "conclusion=failure" >> "$GITHUB_OUTPUT" ;;
+          20) echo "conclusion=neutral" >> "$GITHUB_OUTPUT" ;;
+          *)  echo "conclusion=error" >> "$GITHUB_OUTPUT"; exit $code ;;
+        esac
+        # Fail the workflow step itself only on real unintended diffs
+        # (10), not on a low-confidence replay (20, informational).
+        if [ "$code" -eq 10 ]; then
+          exit 1
+        fi

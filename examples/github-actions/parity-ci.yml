@@ -1,0 +1,38 @@
+# Example consumer workflow for action.yml (docs/plans/phase-8-parity-ci.md).
+# Copy into .github/workflows/ in a repo that already has a parity-capture
+# segment checked in (or fetched as a prior step) and knows how to start
+# its own base/candidate builds. This file has not been run against a
+# real GitHub Actions runner — see phase-8's "known gaps" for why.
+name: parity-ci
+
+on:
+  pull_request:
+
+permissions:
+  pull-requests: write
+  checks: write
+
+jobs:
+  behavioral-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: parity-ci derives --changed-files from it
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build base (main) and candidate (this PR)
+        run: |
+          git worktree add /tmp/base origin/main
+          go build -o /tmp/base-build ./... -C /tmp/base
+          go build -o /tmp/candidate-build .
+
+      - uses: jex2l/parity@main # pin to a release tag in a real adopting repo
+        with:
+          segment: ./segments/latest.zst
+          base-cmd: /tmp/base-build
+          candidate-cmd: ./candidate-build
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -91,10 +91,13 @@ a single Go binary with the frontend embedded. See
 
 `cmd/parity-ci` turns a `report.json` into a check run and PR comment —
 `action.yml` at the repo root wires `parity replay` + `parity-ci`
-together as a drop-in GitHub Action, validated end-to-end on a real
-GitHub Actions run (3 real bugs found and fixed in the process — see
-`docs/plans/phase-8-parity-ci.md` for the full writeup). See
-`examples/github-actions/parity-ci.yml` for a consumer workflow.
+together as a drop-in GitHub Action. Validated twice: self-tested within
+this repo (3 bugs found), then installed on a genuinely separate repo
+as `v0.1.1` (1 more, critical bug found — `v0.1.0` fails on any real
+install). **[docs/client-setup.md](docs/client-setup.md) is the actual
+step-by-step for installing this on your own repo** — start there, not
+with the example file directly. Full writeup of both validation passes
+in `docs/plans/phase-8-parity-ci.md`.
 This is the first concrete piece of a larger platform idea — see
 `docs/parity-labs-architecture.md` — of which this repo's replay engine
 is pillar one.

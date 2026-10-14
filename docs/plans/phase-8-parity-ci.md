@@ -54,16 +54,60 @@ PR comments. That's the actual, working wedge — everything past it is
 roadmap, and the architecture doc says so explicitly rather than
 implying otherwise.
 
+## Update: validated on a real GitHub Actions run (jex2l/parity PR #1)
+
+The "never run on a real runner" gap below is now closed. A one-off
+self-test branch (`test/parity-ci-selftest`, now deleted) added a
+captured segment fixture and a path-scoped workflow, used this repo's
+own `eval/demo-service` as both base and candidate build, and
+deliberately added a `currency` field to `/stats/revenue` so the replay
+had a real behavioral diff to find — not a trivially clean report.
+
+It took 4 runs to go green, and each failure was a real bug, not a
+flake:
+
+1. **`fatal: couldn't find remote ref main`** — both this file's own
+   self-test workflow and `examples/github-actions/parity-ci.yml`
+   hardcoded `origin/main` for the base-branch worktree checkout. This
+   repo's own default branch is `master`. Fixed by deriving the base
+   ref from `github.event.pull_request.base.ref` instead of assuming a
+   name — the same mistake any adopting repo without a branch named
+   `main` would have hit immediately.
+2. **`tar: ... Cannot open: File exists`** — `action.yml` ran its own
+   `actions/setup-go@v5` (with caching) inside the composite action,
+   which collided with the consuming workflow's already-populated Go
+   module cache mid-extraction. Fixed by removing the action's internal
+   setup-go step entirely: a consumer already needs Go on PATH to build
+   its own base/candidate commands before calling this action, so
+   setting it up a second time was both redundant and actively harmful.
+3. **A correctly-posted result still failed the step** — the posting
+   step ran under bash's default `set -e`, so `parity-ci`'s non-zero
+   but meaningful exit codes (10/20/30 are outcomes, not shell errors)
+   killed the script on that line, before `code=$?` could capture it.
+   The check run and PR comment were posted correctly either way — only
+   the workflow step's own pass/fail status was wrong. First fix
+   attempt (`|| true`) was itself wrong: it stops the crash but always
+   sets `$?` to 0, silently discarding the real outcome. Correct fix:
+   `set +e` around the call, `code=$?`, `set -e` after.
+
+The 4th run went fully green: `gh pr checks` showed `selftest: pass`
+and the `Parity / behavioral diff` check completed with
+`conclusion: neutral` (verified via `gh api .../check-runs`, not just
+the CLI's summary view) — correct, since the demo's `generated_at`
+timestamp field makes base-vs-base replay fidelity naturally land
+around 44% on this particular fixture. The posted PR comment correctly
+identified the one real cluster: `/stats/revenue`'s `$.currency` field
+addition, clustered, classified `LIKELY_INTENDED` at 55% confidence
+with an accurate rationale ("only new fields were added... consistent
+with an intentional additive change").
+
+All three fixes are committed on `master`; the self-test branch, its
+segment fixture, and its scoped workflow file were deleted afterward —
+they were scaffolding for this one validation run, not something meant
+to stay in the repo permanently.
+
 ## Known gaps
 
-- `action.yml` has never run inside a real GitHub Actions runner — there
-  is no GitHub Actions environment available in this dev environment to
-  execute it against, matching the same limitation `docs/limits.md`
-  already states for the GitHub App integration generally ("no real
-  GitHub App has ever been registered/installed"). It was reviewed
-  carefully against the Actions composite-action schema and against how
-  `cmd/parity` and `cmd/parity-ci`'s flags actually parse, but "reviewed
-  carefully" is not "verified by running it."
 - The action always builds `parity`/`parity-ci` from source on every run
   (`go build` from `github.action_path`) rather than using a pinned,
   pre-built release binary — fine for a single repo's own CI, adds

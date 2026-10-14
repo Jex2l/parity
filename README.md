@@ -91,10 +91,10 @@ a single Go binary with the frontend embedded. See
 
 `cmd/parity-ci` turns a `report.json` into a check run and PR comment —
 `action.yml` at the repo root wires `parity replay` + `parity-ci`
-together as a drop-in GitHub Action. See
-`examples/github-actions/parity-ci.yml` for a consumer workflow and
-`docs/plans/phase-8-parity-ci.md` for what's built versus what's still
-untested (notably: `action.yml` has never run on a real Actions runner).
+together as a drop-in GitHub Action, validated end-to-end on a real
+GitHub Actions run (3 real bugs found and fixed in the process — see
+`docs/plans/phase-8-parity-ci.md` for the full writeup). See
+`examples/github-actions/parity-ci.yml` for a consumer workflow.
 This is the first concrete piece of a larger platform idea — see
 `docs/parity-labs-architecture.md` — of which this repo's replay engine
 is pillar one.
@@ -160,7 +160,7 @@ replay/diff design in detail.
 | `cmd/parity-capture` | Standalone capture reverse-proxy binary. Runs in front of (or as a sidecar to) the service under observation per `parity.yaml`, forwards requests unmodified, and asynchronously scrubs + records a sampled subset off the hot path (fail-open under backpressure). |
 | `cmd/parity-mcp` | Exposes Parity to coding agents over MCP (stdio transport): run a replay, fetch/explain a report, run the generated regression suite, acknowledge a cluster. Verified against the Go SDK's in-memory client/server transport; never exercised against a real external MCP client process — see `docs/limits.md`. |
 | `cmd/parity-webui` | Interactive HTML report viewer for a `report.json`: cluster explorer, before/after JSON diff browser, performance regression chart, and noise-model inspector. A single static Go binary — the frontend is embedded via `go:embed`, no build step or CDN dependency. |
-| `cmd/parity-ci` | Posts a `report.json` as a GitHub check run + PR comment, classifying clusters with the heuristic baseline first (Phase 8). Pure composition over `internal/report`/`internal/classify`/`internal/gh`. Used by `action.yml` at the repo root. Never run against a real GitHub Actions runner — see `docs/plans/phase-8-parity-ci.md`. |
+| `cmd/parity-ci` | Posts a `report.json` as a GitHub check run + PR comment, classifying clusters with the heuristic baseline first (Phase 8). Pure composition over `internal/report`/`internal/classify`/`internal/gh`. Used by `action.yml` at the repo root. Validated end-to-end on a real GitHub Actions run — see `docs/plans/phase-8-parity-ci.md`. |
 | `cmd/parity-controlplane` | **Not implemented.** Reserved for the hosted/self-hosted run-state machine, GitHub webhook receiver, and report storage described in `docs/architecture.md`'s target design (spec 6.9). The directory exists but is empty — see `docs/limits.md`. |
 | `cmd/parity-replay` | **Not implemented as a separate binary.** Replay currently lives as the `parity replay` subcommand of `cmd/parity`; this directory is an empty placeholder, not a built binary. |
 

@@ -106,6 +106,53 @@ segment fixture, and its scoped workflow file were deleted afterward —
 they were scaffolding for this one validation run, not something meant
 to stay in the repo permanently.
 
+## Update: installed on a real, separate repo (v0.1.0 → v0.1.1)
+
+The self-test above validated the Action *within* `jex2l/parity` —
+useful, but it meant `github.action_path` (parity's own checked-out
+code) and the working directory (also parity's own module) were always
+the same Go module. That quietly masked a real bug that any actual
+adopting repo would hit on the very first run.
+
+`v0.1.0` was tagged and tested by installing it on a genuinely separate
+throwaway repo
+([jex2l/parity-client-test](https://github.com/Jex2l/parity-client-test),
+a minimal unrelated Go service under module `example.com/widget-api`)
+via `uses: jex2l/parity@v0.1.0`, with its own real captured traffic
+segment (500 real requests) and its own PR with a real field addition.
+
+**What that run found:** `action.yml`'s build step ran
+`go build -o ... "${{ github.action_path }}/cmd/parity"` from the
+*consumer's* working directory. Go resolves package path arguments
+against the *current* module, so building a path that belongs to a
+different module (`github.com/jex2l/parity`, checked out under
+`_actions/`) from inside `example.com/widget-api`'s working directory
+fails outright: `directory ... outside main module or its selected
+dependencies`. Every self-test run passed only because parity's own
+code and the working directory happened to be the same module the
+entire time — the bug was invisible until a real stranger's repo tried
+it. Fixed with `go build -C "${{ github.action_path }}" ...`, which
+points Go at the right module before resolving the package path; a
+local reproduction confirmed the exact failure and the exact fix before
+it was pushed. Re-running the Action on the same test repo went green:
+it correctly flagged the deliberately added `sku` field and posted the
+check run + PR comment, cross-repo, for real.
+
+Two smaller, repo-setup-only issues surfaced along the way (not
+`parity` bugs, but worth naming since they're exactly what a real
+client setting this up for the first time would also hit): a
+`.gitignore` pattern meant for a build output binary
+(`widget-api`) accidentally also matched the `cmd/widget-api/`
+source directory because it wasn't anchored to the repo root, and
+`parity.yaml` needs a top-level `service:` field that's easy to miss
+copying from the demo config (`parity.demo.yaml` has it; a bare-minimum
+example didn't).
+
+Tagged as `v0.1.0` (the pre-fix version — never promoted as
+install-ready) and `v0.1.1` (the version that's actually been installed
+successfully on a separate repo). **If you're setting this up for a
+client, use `v0.1.1` or later, not `v0.1.0`.**
+
 ## Known gaps
 
 - The action always builds `parity`/`parity-ci` from source on every run

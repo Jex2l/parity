@@ -1,12 +1,14 @@
 # Example consumer workflow for action.yml (docs/plans/phase-8-parity-ci.md).
 # Copy into .github/workflows/ in a repo that already has a parity-capture
 # segment checked in (or fetched as a prior step) and knows how to start
-# its own base/candidate builds. Validated end-to-end against a real
-# GitHub Actions run on jex2l/parity PR #1 (now closed) — that run found
-# and fixed 3 real bugs across this file and action.yml, including this
-# file originally hardcoding `origin/main`, which fails on any repo whose
-# default branch isn't named "main" (this repo's own default is
-# "master"). Now derives the base branch from the PR event instead.
+# its own base/candidate builds. Self-tested within jex2l/parity (PR #1,
+# now closed; found and fixed 3 bugs, including this file hardcoding
+# `origin/main`, which fails on any repo whose default branch isn't
+# "main"). A local dry-run of this exact command (not yet a real Actions
+# run on a separate repo) caught one more: `go build`'s `-C` flag must
+# come immediately after `build`, not at the end — placed at the end, as
+# this file originally had it, Go parses "-C" itself as an import path
+# and fails with "malformed import path".
 name: parity-ci
 
 on:
@@ -31,10 +33,10 @@ jobs:
       - name: Build base (the PR's base branch) and candidate (this PR)
         run: |
           git worktree add /tmp/base "origin/${{ github.event.pull_request.base.ref }}"
-          go build -o /tmp/base-build ./... -C /tmp/base
+          go build -C /tmp/base -o /tmp/base-build ./...
           go build -o /tmp/candidate-build .
 
-      - uses: jex2l/parity@main # pin to a release tag in a real adopting repo
+      - uses: jex2l/parity@v0.1.0 # pin to a release tag; see https://github.com/Jex2l/parity/releases
         with:
           segment: ./segments/latest.zst
           base-cmd: /tmp/base-build

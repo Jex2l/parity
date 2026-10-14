@@ -60,8 +60,21 @@ runs:
     - name: Build parity + parity-ci
       shell: bash
       run: |
-        go build -o "$RUNNER_TEMP/parity" "${{ github.action_path }}/cmd/parity"
-        go build -o "$RUNNER_TEMP/parity-ci" "${{ github.action_path }}/cmd/parity-ci"
+        # -C (placed immediately after `build`, not at the end — see the
+        # comment in examples/github-actions/parity-ci.yml for why order
+        # matters) is required here, not optional: when a consumer repo
+        # calls this action, github.action_path is parity's checked-out
+        # code under _actions/, a completely different Go module
+        # (github.com/jex2l/parity) than whatever module the consumer's
+        # own working directory belongs to. `go build <path>` resolves
+        # packages relative to the CURRENT module, so without -C this
+        # fails with "directory ... outside main module or its selected
+        # dependencies" — confirmed on a real install (jex2l/parity-labs'
+        # widget-api test repo, PR #2) once self-testing within
+        # jex2l/parity itself (where both happened to share one module)
+        # stopped masking it.
+        go build -C "${{ github.action_path }}" -o "$RUNNER_TEMP/parity" ./cmd/parity
+        go build -C "${{ github.action_path }}" -o "$RUNNER_TEMP/parity-ci" ./cmd/parity-ci
 
     - name: Replay candidate against base
       shell: bash

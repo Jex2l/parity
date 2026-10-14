@@ -15,6 +15,16 @@ falling back to structural rules, citing the real diff line and scoring
 higher confidence than a structural guess alone. All three fixes are
 written up in full in `docs/plans/phase-8-parity-ci.md`.
 
+> ⚠️ **If your repo is private, test this on a throwaway PR before
+> relying on it.** Validating `v0.1.3` found a confirmed,
+> account-level issue where `actions/checkout` fails with "repository
+> not found" on every private repo tried (public repos work every
+> time) — most likely a GitHub plan/billing Actions-minutes
+> restriction, not a bug in this code, but unverified whether it's
+> universal or specific to the account it was found on. See the phase-8
+> doc's "confirmed account-level private-repo blocker" section before
+> promising this works on a private repo.
+
 ## What you need before starting
 
 - A service with an HTTP health-check endpoint (any path works, you'll

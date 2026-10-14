@@ -187,6 +187,58 @@ everything pass, it makes the right things pass.
 `v0.1.1` technically works but will make the check look permanently
 broken; `v0.1.0` fails outright on install.
 
+## Update: grounded classification (v0.1.3), and a confirmed account-level private-repo blocker
+
+Pillar 2's grounded classifier (`internal/classify/grounded`, ported
+from the standalone prototype in `jex2l/parity-labs` — that package
+lives in a separate module and can't be imported directly, since
+`classify.Classifier`'s interface types are under `internal/`) is now
+wired into `cmd/parity-ci` by default, with `classify.Heuristic{}` as
+its fallback. A new `internal/gitdiff` package parses `git diff` output
+into the evidence it searches; `action.yml` now runs that diff and
+passes it via a new `--diff-file` flag.
+
+Confirmed live, cross-repo, on `jex2l/parity-client-test` PR #6: an
+added `category` field (JSON tag `category`, Go field `Category`) was
+classified `LIKELY_INTENDED` at **80% confidence**, citing the actual
+diff line — up from the structural heuristic's 55% with no citation at
+all. A value change with no matching diff evidence (`price_cents` vs. a
+Go source line reading `Price: 249`) correctly fell back to the
+heuristic's 30%-confidence `UNCERTAIN`, proving the token-based field
+matching (case- and underscore-insensitive, so a JSON tag like
+`in_stock` matches a Go field `InStock`) doesn't just claim grounding
+everywhere — it requires an actual identifier match.
+
+**Separately, and more importantly for anyone deploying this to a real
+client: validating this surfaced a confirmed, unresolved, account-level
+issue with *private* repos.** Every public-repo run (7 of them, across
+`jex2l/parity-client-test` PRs #1-#6) worked correctly. Every attempt
+against a private repo failed identically at the very first step —
+`actions/checkout@v4` — with `remote: Repository not found`, even
+though the `gh` CLI session driving the test (full `repo` OAuth scope,
+confirmed via `gh auth status`) could create, push to, and open PRs
+against the same private repo without any issue. This was tested twice
+to rule out a one-off: once on a repo that was created public then
+switched private (`jex2l/parity-client-test`, made private, confirmed
+failing, switched back to public to finish validating v0.1.3, then
+re-privatized), and once on a repo created **private from the start**
+(`jex2l/parity-client-test-2`) — same failure both times, ruling out
+"stale permissions from a visibility change" as the cause.
+
+What this rules out: it's not a bug in `action.yml`, `cmd/parity-ci`,
+or the grounded classifier — the failure happens in `actions/checkout`,
+before any of this repo's own code ever runs, and only on this
+account's private repos specifically (public repos, same account, same
+workflow file, work every time). What it doesn't rule out, because it
+couldn't be checked with the credentials available here (the GitHub
+billing API returned 404 for this token's scope): a GitHub Free-plan
+Actions-minutes quota specifically for private repos, or some other
+account-level billing/plan restriction. **This needs checking directly
+in the account's GitHub billing/plan settings before promising a client
+this works on a private repo** — it's unverified whether this is
+specific to this one account/plan or would affect any free-tier GitHub
+account trying the same thing.
+
 ## Known gaps
 
 - The action always builds `parity`/`parity-ci` from source on every run

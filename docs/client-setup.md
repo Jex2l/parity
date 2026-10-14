@@ -5,13 +5,15 @@ bottom; every step here was just run for real, on a separate throwaway
 repo, before this doc was written — not from memory. If you hit
 anything not covered here, treat that as a doc bug, not a you problem.
 
-**Use `jex2l/parity@v0.1.2` or later.** `v0.1.0` fails on every real
+**Use `jex2l/parity@v0.1.3` or later.** `v0.1.0` fails on every real
 install (a cross-module build bug); `v0.1.1` installs and detects
 diffs correctly but its GitHub check fails on *every* PR regardless of
 how confidently intentional the change looks, which trains reviewers to
-ignore it — `v0.1.2` fixes that by actually using the classification to
-decide pass/fail. Both fixes are written up in full in
-`docs/plans/phase-8-parity-ci.md`.
+ignore it (fixed in `v0.1.2`); `v0.1.3` adds grounded classification —
+the classifier searches the PR's actual diff text for evidence before
+falling back to structural rules, citing the real diff line and scoring
+higher confidence than a structural guess alone. All three fixes are
+written up in full in `docs/plans/phase-8-parity-ci.md`.
 
 ## What you need before starting
 
@@ -25,8 +27,8 @@ decide pass/fail. Both fixes are written up in full in
 ## Step 1 — install `parity` and `parity-capture` locally
 
 ```bash
-go install github.com/jex2l/parity/cmd/parity@v0.1.2
-go install github.com/jex2l/parity/cmd/parity-capture@v0.1.2
+go install github.com/jex2l/parity/cmd/parity@v0.1.3
+go install github.com/jex2l/parity/cmd/parity-capture@v0.1.3
 ```
 
 ## Step 2 — write `parity.yaml` in your repo root
@@ -96,8 +98,12 @@ least one changed cluster is classified `UNCERTAIN` or
 every single diff regardless of classification — confirmed live on two
 back-to-back test PRs before `v0.1.2` fixed it; see
 `docs/plans/phase-8-parity-ci.md`.) Two real, confirmed examples from
-validating this exact flow — same tool, two different outcomes for two
-different kinds of change:
+validating that fix (on `v0.1.2`, before `v0.1.3`'s grounded
+classification existed — the confidence numbers below are from the
+structural heuristic; `v0.1.3` cites the actual diff line and scores
+higher when it finds one, see the phase-8 doc for a live `v0.1.3`
+example) — same tool, two different outcomes for two different kinds of
+change:
 
 **An additive, low-severity change (passes, neutral):**
 ```

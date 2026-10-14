@@ -7,8 +7,9 @@
 // its own glue code.
 //
 // It deliberately reuses existing, already-tested packages
-// (internal/report, internal/classify, internal/gh) rather than
-// reimplementing anything — this command is pure composition.
+// (internal/report, internal/classify, internal/classify/grounded,
+// internal/gitdiff, internal/gh) rather than reimplementing anything —
+// this command is pure composition.
 package main
 
 import (
@@ -21,7 +22,9 @@ import (
 	"strings"
 
 	"github.com/jex2l/parity/internal/classify"
+	"github.com/jex2l/parity/internal/classify/grounded"
 	"github.com/jex2l/parity/internal/gh"
+	"github.com/jex2l/parity/internal/gitdiff"
 	"github.com/jex2l/parity/internal/report"
 )
 
@@ -58,6 +61,7 @@ type config struct {
 	prDesc       string
 	dryRun       bool
 	apiBaseURL   string
+	diffFile     string
 }
 
 func main() {
@@ -83,10 +87,21 @@ func run(args []string, stdout, stderr *os.File) int {
 		return exitInfraError
 	}
 
+	var diffHunks []classify.DiffHunk
+	if cfg.diffFile != "" {
+		diffText, err := os.ReadFile(cfg.diffFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "parity-ci: reading --diff-file %q: %v (continuing without grounded evidence, falling back to the structural heuristic)\n", cfg.diffFile, err)
+		} else {
+			diffHunks = gitdiff.Parse(string(diffText))
+		}
+	}
+
 	annotations := classifyClusters(rep, classify.PRContext{
 		ChangedFiles: cfg.changedFiles,
 		Title:        cfg.prTitle,
 		Description:  cfg.prDesc,
+		DiffHunks:    diffHunks,
 	})
 
 	body := report.RenderMarkdown(rep, annotations, cfg.testsLink)
@@ -141,11 +156,17 @@ func run(args []string, stdout, stderr *os.File) int {
 // classifyClusters runs the heuristic classifier over every cluster,
 // keeping the clusters' existing severity-first ordering (diff.BuildClusters
 // already sorts that way, and report.Report preserves it).
+// classifyClusters uses classify/grounded.Classifier, which searches
+// pr.DiffHunks for evidence before falling back to classify.Heuristic's
+// structural rules when no hunks are provided or none ground a given
+// cluster — see grounded's package doc comment. When pr.DiffHunks is
+// empty (e.g. an older action.yml that doesn't pass --diff-file yet),
+// this behaves identically to the old bare-Heuristic behavior.
 func classifyClusters(rep report.Report, pr classify.PRContext) []report.ClusterAnnotation {
 	if len(rep.Clusters) == 0 {
 		return nil
 	}
-	h := classify.Heuristic{}
+	h := grounded.Classifier{Fallback: classify.Heuristic{}}
 	out := make([]report.ClusterAnnotation, 0, len(rep.Clusters))
 	for _, c := range rep.Clusters {
 		res := h.Classify(c, pr)
@@ -284,6 +305,10 @@ func parseFlags(args []string) (config, error) {
 			if changedFiles, err = next(); err != nil {
 				return cfg, err
 			}
+		case "--diff-file":
+			if cfg.diffFile, err = next(); err != nil {
+				return cfg, err
+			}
 		case "--pr-title":
 			if cfg.prTitle, err = next(); err != nil {
 				return cfg, err
@@ -316,13 +341,19 @@ func parseFlags(args []string) (config, error) {
 
 func usage(w *os.File) {
 	fmt.Fprintln(w, `usage:
-  parity-ci --report report.json [--owner O --repo R --pr N --sha SHA] [--token-env NAME] [--check-name NAME] [--changed-files a,b,c] [--pr-title T] [--pr-description D] [--tests-link URL] [--api-base-url URL] [--dry-run]
+  parity-ci --report report.json [--owner O --repo R --pr N --sha SHA] [--token-env NAME] [--check-name NAME] [--changed-files a,b,c] [--diff-file path] [--pr-title T] [--pr-description D] [--tests-link URL] [--api-base-url URL] [--dry-run]
 
 Posts the given report.json as a PR comment and check run, classifying
-each cluster with the heuristic baseline first. With --dry-run, renders
-the comment body to stdout and exits without contacting GitHub — useful
-for local testing or a workflow step that only wants the markdown.
+each cluster with classify/grounded (evidence from --diff-file's raw
+"git diff" output, falling back to the structural heuristic baseline
+when --diff-file is omitted or a cluster can't be grounded in it). With
+--dry-run, renders the comment body to stdout and exits without
+contacting GitHub — useful for local testing or a workflow step that
+only wants the markdown.
 
-Exit codes match "parity replay": 0 clean, 10 unintended diffs found,
-20 low-confidence replay, 30 infra/usage error.`)
+Exit codes: 0 clean, 10 unintended/uncertain diffs found (needs human
+review), 15 diffs found but every one classified LIKELY_INTENDED
+(visible, non-blocking), 20 low-confidence replay, 30 infra/usage
+error. 0/10/20/30 match "parity replay"'s own contract; 15 is specific
+to this binary, which has classification data "parity replay" doesn't.`)
 }

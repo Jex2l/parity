@@ -32,11 +32,22 @@ type Result struct {
 
 // PRContext is what the classifier is given about the PR producing the
 // candidate build, per spec 6.7: changed file paths, title, description.
-// No raw diff hunks are required for the heuristic baseline.
+// No raw diff hunks are required for the heuristic baseline (this
+// struct's own Classify method below never reads DiffHunks) — they
+// exist for classify/grounded's Classifier, which does.
 type PRContext struct {
 	ChangedFiles []string
 	Title        string
 	Description  string
+	DiffHunks    []DiffHunk
+}
+
+// DiffHunk is one file's added/removed lines from a PR diff, with the
+// leading "+"/"-" already stripped.
+type DiffHunk struct {
+	File    string
+	Added   []string
+	Removed []string
 }
 
 // Classifier labels one cluster.

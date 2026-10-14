@@ -117,6 +117,16 @@ runs:
         # command instead would "fix" the symptom but always set $? to 0,
         # losing the real exit code entirely — tried that first, it's
         # wrong; set +e/-e around the call is the correct fix.)
+        # Written for classify/grounded to search for evidence (added in
+        # cmd/parity-ci's --diff-file flag). A missing/empty diff file
+        # just means every cluster falls back to the structural
+        # heuristic — see classify/grounded's package doc comment — so
+        # this intentionally doesn't fail the step if `git diff` comes
+        # back empty (e.g. a shallow checkout that couldn't resolve the
+        # base ref; `--changed-files` below degrades the same way for
+        # the same reason, already documented in docs/client-setup.md).
+        git diff "origin/${{ github.event.pull_request.base.ref }}..." > "$RUNNER_TEMP/pr.diff" || true
+
         set +e
         "$RUNNER_TEMP/parity-ci" \
           --report "$RUNNER_TEMP/parity-report.json" \
@@ -127,6 +137,7 @@ runs:
           --token-env GITHUB_TOKEN \
           --check-name "${{ inputs.check-name }}" \
           --changed-files "$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}... | paste -sd, -)" \
+          --diff-file "$RUNNER_TEMP/pr.diff" \
           --pr-title "${{ github.event.pull_request.title }}"
         code=$?
         set -e

@@ -91,12 +91,14 @@ a single Go binary with the frontend embedded. See
 
 `cmd/parity-ci` turns a `report.json` into a check run and PR comment —
 `action.yml` at the repo root wires `parity replay` + `parity-ci`
-together as a drop-in GitHub Action. **Use `v0.1.2` or later** — `v0.1.0`
-fails on any real install, and `v0.1.1` installs fine but fails its
-check on every single PR regardless of how confidently intentional a
-change looks (fixed in `v0.1.2` by actually using the classification to
-decide pass/fail). All three versions were validated by installing on a
-genuinely separate repo, not just self-tested within this one.
+together as a drop-in GitHub Action. **Use `v0.1.3` or later** — `v0.1.0`
+fails on any real install, `v0.1.1` installs fine but fails its check on
+every single PR regardless of how confidently intentional a change looks
+(fixed in `v0.1.2`), and `v0.1.3` adds grounded classification: the
+classifier now searches the PR's actual diff text for evidence before
+falling back to structural rules, citing the real diff line instead of
+guessing from severity alone. Every version was validated by installing
+on a genuinely separate repo, not just self-tested within this one.
 **[docs/client-setup.md](docs/client-setup.md) is the actual step-by-step
 for installing this on your own repo** — start there, not with the
 example file directly. Full writeup of every validation pass, including

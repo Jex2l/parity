@@ -1,8 +1,12 @@
 # Example consumer workflow for action.yml (docs/plans/phase-8-parity-ci.md).
 # Copy into .github/workflows/ in a repo that already has a parity-capture
 # segment checked in (or fetched as a prior step) and knows how to start
-# its own base/candidate builds. This file has not been run against a
-# real GitHub Actions runner — see phase-8's "known gaps" for why.
+# its own base/candidate builds. Validated end-to-end against a real
+# GitHub Actions run on jex2l/parity PR #1 (now closed) — that run found
+# and fixed 3 real bugs across this file and action.yml, including this
+# file originally hardcoding `origin/main`, which fails on any repo whose
+# default branch isn't named "main" (this repo's own default is
+# "master"). Now derives the base branch from the PR event instead.
 name: parity-ci
 
 on:
@@ -24,9 +28,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build base (main) and candidate (this PR)
+      - name: Build base (the PR's base branch) and candidate (this PR)
         run: |
-          git worktree add /tmp/base origin/main
+          git worktree add /tmp/base "origin/${{ github.event.pull_request.base.ref }}"
           go build -o /tmp/base-build ./... -C /tmp/base
           go build -o /tmp/candidate-build .
 

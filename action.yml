@@ -93,6 +93,18 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         PR_NUMBER="${{ github.event.pull_request.number }}"
+        # set +e matters: this step's shell runs under `set -e` (GitHub
+        # Actions' default for a `run:` block), so without disabling it
+        # a non-zero exit from parity-ci (10/20/30 are all expected,
+        # meaningful outcomes, not shell errors) kills the script on this
+        # line, before `code=$?` below ever runs — confirmed live on
+        # jex2l/parity PR #1: a correct, successfully-posted "neutral"
+        # (low-confidence) result still made this step report failure,
+        # because `code=$?` never executed. (A trailing `|| true` on the
+        # command instead would "fix" the symptom but always set $? to 0,
+        # losing the real exit code entirely — tried that first, it's
+        # wrong; set +e/-e around the call is the correct fix.)
+        set +e
         "$RUNNER_TEMP/parity-ci" \
           --report "$RUNNER_TEMP/parity-report.json" \
           --owner "${{ github.repository_owner }}" \
@@ -104,6 +116,7 @@ runs:
           --changed-files "$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}... | paste -sd, -)" \
           --pr-title "${{ github.event.pull_request.title }}"
         code=$?
+        set -e
         case $code in
           0)  echo "conclusion=success" >> "$GITHUB_OUTPUT" ;;
           10) echo "conclusion=failure" >> "$GITHUB_OUTPUT" ;;

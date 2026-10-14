@@ -133,11 +133,22 @@ runs:
         case $code in
           0)  echo "conclusion=success" >> "$GITHUB_OUTPUT" ;;
           10) echo "conclusion=failure" >> "$GITHUB_OUTPUT" ;;
+          15) echo "conclusion=neutral" >> "$GITHUB_OUTPUT" ;;
           20) echo "conclusion=neutral" >> "$GITHUB_OUTPUT" ;;
           *)  echo "conclusion=error" >> "$GITHUB_OUTPUT"; exit $code ;;
         esac
-        # Fail the workflow step itself only on real unintended diffs
-        # (10), not on a low-confidence replay (20, informational).
+        # Fail the workflow step itself only on real unintended/uncertain
+        # diffs (10) — NOT on 15 (clusters found, but every one classified
+        # LIKELY_INTENDED) or 20 (low-confidence replay, informational).
+        # Found live: every test PR against this action failed the check
+        # even when the classifier was confident a change was intentional,
+        # because this `if` used to be the ONLY gate and parity-ci's own
+        # exit-code contract didn't yet distinguish "found a diff" from
+        # "found a diff that needs a human" — see cmd/parity-ci/main.go's
+        # outcome() comment for the full story. Missing the 15) case
+        # above would independently break this too: without it, 15 falls
+        # into the `*)` branch and the step exits with code 15 regardless
+        # of this check.
         if [ "$code" -eq 10 ]; then
           exit 1
         fi

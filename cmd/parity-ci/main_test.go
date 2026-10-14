@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jex2l/parity/internal/classify"
+	"github.com/jex2l/parity/internal/diff"
 	"github.com/jex2l/parity/internal/gh"
 	"github.com/jex2l/parity/internal/report"
 )
@@ -30,6 +32,13 @@ func cleanReport() report.Report {
 	return report.Report{RunID: "run-1", TotalReplayed: 10, Fidelity: report.FidelitySummary{Score: 1.0}}
 }
 
+// dirtyReport's cluster has ChangeTypes "modified" (not FIELD_ADDED,
+// FIELD_REMOVED, TYPE_CHANGED, or ERROR_APPEARED) and Severity "critical"
+// without an ERROR_APPEARED change type, so none of classify.Heuristic's
+// rules 1-4 match and it falls through to the default Uncertain verdict
+// — i.e. this report's cluster is classified Uncertain, not
+// LikelyUnintended, despite the "critical" severity label (critical
+// severity alone isn't rule 1's trigger; an actual 5xx appearing is).
 func dirtyReport() report.Report {
 	return report.Report{
 		RunID:         "run-2",
@@ -38,6 +47,22 @@ func dirtyReport() report.Report {
 		SignalCount:   1,
 		Clusters: []report.ClusterView{
 			{Endpoint: "/users/{id}", ChangedPaths: []string{"email"}, ChangeTypes: []string{"modified"}, Severity: "critical", Count: 1, WeightedCount: 1},
+		},
+	}
+}
+
+// likelyIntendedReport mirrors the real scenario from validating this
+// tool end-to-end on jex2l/parity-client-test#2: a low-severity,
+// additive-only field change, which classify.Heuristic's rule 3 labels
+// LikelyIntended.
+func likelyIntendedReport() report.Report {
+	return report.Report{
+		RunID:         "run-3",
+		TotalReplayed: 500,
+		Fidelity:      report.FidelitySummary{Score: 1.0},
+		SignalCount:   1,
+		Clusters: []report.ClusterView{
+			{Endpoint: "/widgets", ChangedPaths: []string{"$.sku"}, ChangeTypes: []string{string(diff.FieldAdded)}, Severity: "low", Count: 500, WeightedCount: 500},
 		},
 	}
 }
@@ -71,6 +96,28 @@ func TestDryRun_ClustersFound_ExitsUnintended(t *testing.T) {
 	out := stdout.read(t)
 	if !strings.Contains(out, "/users/{id}") {
 		t.Fatalf("expected cluster endpoint in markdown, got: %s", out)
+	}
+}
+
+func TestDryRun_AllClustersLikelyIntended_DoesNotFailTheCheck(t *testing.T) {
+	// Regression test for the real bug found validating this tool
+	// end-to-end: every single test PR failed the check, including one
+	// the classifier itself labeled LIKELY_INTENDED — because outcome()
+	// used to only check len(rep.Clusters), ignoring the classification
+	// entirely. A confidently-intended, additive-only change must not
+	// produce exitUnintended/ConclusionFailure.
+	dir := t.TempDir()
+	path := writeReport(t, dir, likelyIntendedReport())
+
+	stdout, stderr := captureOutput(t, dir)
+	code := run([]string{"--report", path, "--dry-run"}, stdout.file, stderr.file)
+
+	if code != exitLikelyIntended {
+		t.Fatalf("exit code = %d, want %d (should NOT be exitUnintended=%d)", code, exitLikelyIntended, exitUnintended)
+	}
+	out := stdout.read(t)
+	if !strings.Contains(out, "LIKELY_INTENDED") {
+		t.Fatalf("expected LIKELY_INTENDED in markdown, got: %s", out)
 	}
 }
 
@@ -174,25 +221,53 @@ func TestPostsCheckRunAndComment_AgainstFakeGitHub(t *testing.T) {
 }
 
 func TestOutcomeAndCheckTitle(t *testing.T) {
-	conclusion, code := outcome(cleanReport())
+	noPR := classify.PRContext{}
+
+	conclusion, code := outcome(cleanReport(), nil)
 	if conclusion != gh.ConclusionSuccess || code != exitClean {
 		t.Fatalf("clean report: got (%s, %d)", conclusion, code)
 	}
 
-	conclusion, code = outcome(dirtyReport())
+	dirty := dirtyReport()
+	conclusion, code = outcome(dirty, classifyClusters(dirty, noPR))
 	if conclusion != gh.ConclusionFailure || code != exitUnintended {
 		t.Fatalf("dirty report: got (%s, %d)", conclusion, code)
 	}
 
+	intended := likelyIntendedReport()
+	conclusion, code = outcome(intended, classifyClusters(intended, noPR))
+	if conclusion != gh.ConclusionNeutral || code != exitLikelyIntended {
+		t.Fatalf("all-likely-intended report: got (%s, %d), want (neutral, %d)", conclusion, code, exitLikelyIntended)
+	}
+
 	lowConf := cleanReport()
 	lowConf.Fidelity.LowConfidence = true
-	conclusion, code = outcome(lowConf)
+	conclusion, code = outcome(lowConf, nil)
 	if conclusion != gh.ConclusionNeutral || code != exitFidelityLow {
 		t.Fatalf("low-confidence report: got (%s, %d)", conclusion, code)
 	}
 
-	if title := checkTitle(dirtyReport()); !strings.Contains(title, "1 behavioral diff cluster") {
-		t.Fatalf("unexpected check title: %q", title)
+	if title := checkTitle(dirty, classifyClusters(dirty, noPR)); !strings.Contains(title, "need review") {
+		t.Fatalf("unexpected check title for an uncertain cluster: %q", title)
+	}
+	if title := checkTitle(intended, classifyClusters(intended, noPR)); !strings.Contains(title, "all look intended") {
+		t.Fatalf("unexpected check title for an all-intended report: %q", title)
+	}
+}
+
+func TestOutcome_MixedClusters_OneUncertainStillFailsTheCheck(t *testing.T) {
+	// Even if some clusters are confidently intended, a single
+	// UNCERTAIN or LIKELY_UNINTENDED cluster must still fail the check
+	// — "mostly fine" isn't the bar, "nothing needs a human look" is.
+	mixed := report.Report{
+		Clusters: []report.ClusterView{
+			{Endpoint: "/widgets", ChangedPaths: []string{"$.sku"}, ChangeTypes: []string{string(diff.FieldAdded)}, Severity: "low"},
+			{Endpoint: "/widgets", ChangedPaths: []string{"$.price_cents"}, ChangeTypes: []string{"modified"}, Severity: "medium"},
+		},
+	}
+	conclusion, code := outcome(mixed, classifyClusters(mixed, classify.PRContext{}))
+	if conclusion != gh.ConclusionFailure || code != exitUnintended {
+		t.Fatalf("mixed report: got (%s, %d), want (failure, %d)", conclusion, code, exitUnintended)
 	}
 }
 

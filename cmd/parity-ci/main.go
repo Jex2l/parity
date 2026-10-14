@@ -26,14 +26,22 @@ import (
 )
 
 // Exit codes mirror cmd/parity's existing contract (see that file's
-// comment) so a workflow can gate on the same exit-code semantics
-// whether it calls `parity replay` directly or goes through this
-// posting step.
+// comment) for 0/10/20/30, so a workflow can gate on the same
+// semantics whether it calls `parity replay` directly or goes through
+// this posting step. exitLikelyIntended (15) is new here and has no
+// equivalent in `parity replay`: that command has no classification
+// data to work with (classification happens in this binary, after
+// replay), so it can't distinguish "found a diff" from "found a diff
+// the heuristic classifier is confident is intentional" — this binary
+// can and does. See the comment on outcome() for why that distinction
+// matters: without it, a GitHub check fails on every single PR that
+// touches the service at all, which trains reviewers to ignore it.
 const (
-	exitClean       = 0
-	exitUnintended  = 10
-	exitFidelityLow = 20
-	exitInfraError  = 30
+	exitClean          = 0
+	exitUnintended     = 10
+	exitLikelyIntended = 15
+	exitFidelityLow    = 20
+	exitInfraError     = 30
 )
 
 type config struct {
@@ -82,7 +90,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	})
 
 	body := report.RenderMarkdown(rep, annotations, cfg.testsLink)
-	conclusion, exitCode := outcome(rep)
+	conclusion, exitCode := outcome(rep, annotations)
 
 	if cfg.dryRun {
 		fmt.Fprintln(stdout, body)
@@ -117,7 +125,7 @@ func run(args []string, stdout, stderr *os.File) int {
 			HeadSHA:    cfg.sha,
 			Status:     "completed",
 			Conclusion: conclusion,
-			Output:     gh.CheckRunOutput{Title: checkTitle(rep), Summary: body},
+			Output:     gh.CheckRunOutput{Title: checkTitle(rep, annotations), Summary: body},
 		}); err != nil {
 			fmt.Fprintf(stderr, "parity-ci: creating check run: %v\n", err)
 			return exitInfraError
@@ -151,28 +159,59 @@ func classifyClusters(rep report.Report, pr classify.PRContext) []report.Cluster
 	return out
 }
 
-// outcome maps a report onto a GitHub check conclusion and this
-// command's own exit code, mirroring `parity replay`'s existing
-// exitClean/exitUnintended/exitFidelityLow contract so CI gating
-// behaves identically regardless of which binary produced the exit code.
-func outcome(rep report.Report) (gh.CheckRunConclusion, int) {
+// outcome maps a report + its classifications onto a GitHub check
+// conclusion and this command's own exit code.
+//
+// Earlier versions of this function looked only at len(rep.Clusters),
+// mirroring `parity replay`'s own exit-code contract: ANY cluster meant
+// failure, full stop. That's the right call for `parity replay` (it has
+// no classification data to work with), but wrong for this command,
+// which does: validating this tool end-to-end on a real repo
+// (jex2l/parity-client-test, PRs #2 and #3) showed every single test
+// PR failing the check — including one the classifier itself labeled
+// LIKELY_INTENDED at 55% confidence. A check that's red on every PR,
+// confident-looking changes included, trains reviewers to stop reading
+// it, which defeats the entire point of a review-focusing tool.
+//
+// Now: only an UNCERTAIN or LIKELY_UNINTENDED cluster fails the check.
+// A report where every cluster the classifier saw was LIKELY_INTENDED
+// still gets a visible, non-blocking (neutral) check + PR comment —
+// the information is there for a human who wants it, but it doesn't
+// manufacture a false alarm on confidently-intentional changes.
+func outcome(rep report.Report, annotations []report.ClusterAnnotation) (gh.CheckRunConclusion, int) {
 	if rep.Fidelity.LowConfidence {
 		return gh.ConclusionNeutral, exitFidelityLow
 	}
-	if len(rep.Clusters) > 0 {
-		return gh.ConclusionFailure, exitUnintended
+	if len(rep.Clusters) == 0 {
+		return gh.ConclusionSuccess, exitClean
 	}
-	return gh.ConclusionSuccess, exitClean
+	for _, a := range annotations {
+		if a.Label != string(classify.LikelyIntended) {
+			return gh.ConclusionFailure, exitUnintended
+		}
+	}
+	return gh.ConclusionNeutral, exitLikelyIntended
 }
 
-func checkTitle(rep report.Report) string {
+func checkTitle(rep report.Report, annotations []report.ClusterAnnotation) string {
 	if rep.Fidelity.LowConfidence {
 		return "Parity: low-confidence replay"
 	}
-	if n := len(rep.Clusters); n > 0 {
-		return fmt.Sprintf("Parity: %d behavioral diff cluster(s)", n)
+	n := len(rep.Clusters)
+	if n == 0 {
+		return "Parity: no behavioral differences"
 	}
-	return "Parity: no behavioral differences"
+	allIntended := true
+	for _, a := range annotations {
+		if a.Label != string(classify.LikelyIntended) {
+			allIntended = false
+			break
+		}
+	}
+	if allIntended {
+		return fmt.Sprintf("Parity: %d cluster(s), all look intended", n)
+	}
+	return fmt.Sprintf("Parity: %d behavioral diff cluster(s) need review", n)
 }
 
 func parseFlags(args []string) (config, error) {
